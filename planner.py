@@ -67,7 +67,7 @@ def position(row): return (row["lat"],row["lon"])
 
 def approximate_legs(points):
     # Local estimate includes a street detour and time at crossings.
-    return [max(2,math.ceil(km(a,b)*1.4/4.2*60)+2) for a,b in zip(points,points[1:])]
+    return [0 if a==b else max(2,math.ceil(km(a,b)*1.4/4.2*60)+2) for a,b in zip(points,points[1:])]
 
 def build_candidates(rows,p,tags,required,flags,origin):
     tired=bool(re.search(r"tired|low.energy|relax|gentle|slow|exhaust|laid.back",p.mood,re.I))
@@ -80,7 +80,7 @@ def build_candidates(rows,p,tags,required,flags,origin):
             if not required <= covered: continue
             points=([origin] if origin else [])+[position(r) for r in stops]
             legs=approximate_legs(points)
-            if any(m>(25 if tired else 40) for m in legs) or ("no_walk" in flags and legs): continue
+            if any(m>(25 if tired else 40) for m in legs) or ("no_walk" in flags and any(legs)): continue
             value=16*len(set(tags)&covered)+2*length-0.20*sum(legs)
             if tired: value-=2*(length-1)+0.09*sum(legs)
             if "crowds" in flags: value-=4*kinds.count("market")

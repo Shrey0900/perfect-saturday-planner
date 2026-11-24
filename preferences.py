@@ -23,8 +23,10 @@ EXAMPLES = {
     "history": ["history heritage monuments architecture", "historic buildings old city", "historical landmarks fort palace"],
     "shopping": ["shopping markets browse stalls", "shop for gifts clothes handicrafts", "souvenirs local crafts boutiques"]
 }
+STOPWORDS = set("a an the to of in on at from for and or with my me i we want would like our but something some by".split())
+
 def tokens(s):
-    return re.findall(r"[a-zÀ-ž]+", s.lower())
+    return [w for w in re.findall(r"[a-zÀ-ž]+", s.lower()) if w not in STOPWORDS]
 
 COUNTS = {label: Counter(tokens(" ".join(phrases))) for label, phrases in EXAMPLES.items()}
 VOCAB = set().union(*COUNTS.values())
@@ -97,7 +99,7 @@ def local_parse(text):
            (r"\b(?:vegetarian|veg)\b","vegetarian"),(r"(?:avoid|hate|no|away from|skip) crowds?|\b(?:uncrowded|crowded places|quiet places)\b","avoid crowds"),
            (r"(?:indoors? only|stay indoors|no outdoors?)","indoors only"),(r"(?:outdoors? only|no indoors?)","outdoors only"),
            (r"wheelchair|step[\s-]*free","wheelchair access"),(r"(?:no walking|can't walk|cannot walk)","no walking"),
-           (r"(?:must|need|want|have to) (?:have|get|eat|include|grab)?\s*(?:a |some )?(?:meal|lunch|dinner|breakfast|food)\b","meal required"),
+           (r"(?:must|need|want|have to)(?: to)? (?:have|get|eat|include|grab)?\s*(?:a |some )?(?:meal|lunch|dinner|breakfast|food)\b","meal required"),
            (r"(?:live (?:music|show|gig) (?:is a must|only|required)|must (?:have|include) live music)","live performance required")]
     for pattern, label in rules:
         if re.search(pattern,s):

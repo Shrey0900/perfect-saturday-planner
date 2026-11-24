@@ -4,7 +4,7 @@ from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 from main import app
 from planner import BANGALORE_EXAMPLE, run_plan
-from preferences import duration, local_parse
+from preferences import classify, duration, local_parse
 
 SAMPLE={"city":"Bangalore","budget":2000,"available_time":"4 hours","mood":"tired","interests":["food","music","walks"],"constraints":["vegetarian","avoid crowded places"]}
 
@@ -70,6 +70,8 @@ class PlannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(events[-1]["stops"]),1)
 
     def test_normalization(self):
+        self.assertEqual(classify("I want a museum"),"art")
+        self.assertIsNone(classify("I am in Delhi"))
         self.assertEqual(duration("1 hour 30 minutes"),90)
         self.assertEqual(local_parse("Delhi, ₹1,500 and two hours at 3 pm").start_time,"15:00")
         self.assertEqual(local_parse("Delhi, ₹1.5k, 2 hours").budget,1500)

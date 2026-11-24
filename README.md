@@ -2,6 +2,8 @@
 
 Describe a Saturday outing or paste the assignment JSON. The planner returns named places, a stop-by-stop timeline, walking estimates, spending for the whole group, reasons for each stop, and a trace of the tools it used.
 
+[Open the live planner](https://perfect-saturday-planner-exz7.onrender.com)
+
 ## Run locally
 
 Use Python 3.12. From the project directory:
