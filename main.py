@@ -1,9 +1,11 @@
 """HTTP entry points for the public planner."""
 
 import json
+import logging
 import os
 import time
 from collections import OrderedDict, deque
+from functools import lru_cache
 from ipaddress import ip_address
 from pathlib import Path
 
@@ -25,18 +27,38 @@ def index():
 
 
 @app.get("/health")
-def health():
-    return {"status": "ok"}
+def health(request: Request, details: bool = False):
+    if not details:
+        return {"status": "ok"}
+    _, source = visitor_identity(request)
+    return {
+        "status": "ok",
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
+        "geoapify_configured": bool(os.getenv("GEOAPIFY_API_KEY", "").strip()),
+        "rate_limit_identity": source,
+    }
 
 
-def visitor_key(request):
+def visitor_identity(request):
     # This override applies only behind Render's public Cloudflare ingress.
     if os.getenv("RENDER") == "true":
         try:
-            return str(ip_address(request.headers.get("cf-connecting-ip", "")))
+            return str(ip_address(request.headers.get("cf-connecting-ip", ""))), "CF-Connecting-IP"
         except ValueError:
             pass
-    return request.client.host if request.client else "visitor"
+    return (request.client.host if request.client else "visitor"), "socket peer"
+
+
+@lru_cache(maxsize=2)
+def log_identity_source(source):
+    logging.getLogger("uvicorn.error").info("Planner rate-limit identity source: %s", source)
+
+
+def visitor_key(request):
+    key, source = visitor_identity(request)
+    if os.getenv("RENDER") == "true":
+        log_identity_source(source)
+    return key
 
 
 def rate_limited(key):

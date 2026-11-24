@@ -153,6 +153,31 @@ def classify(text):
 Short = Annotated[str, Field(max_length=180)]
 
 
+# Recover explicit topic names before asking the single-label classifier to
+# interpret an ambiguous phrase. Preserve the order the visitor mentioned them.
+TOPIC_NAMES = {
+    **{topic: topic for topic in EXAMPLES},
+    "heritage": "history",
+    "walk": "walks",
+    "walking": "walks",
+    "books": "books",
+    "bookshops": "books",
+    "museums": "art",
+    "museum": "art",
+    "lunch": "food",
+    "dinner": "food",
+}
+TOPIC_PATTERN = re.compile(r"\b(?:" + "|".join(map(re.escape, TOPIC_NAMES)) + r")\b", re.I)
+
+
+def interest_topics(text):
+    named = [TOPIC_NAMES[m[0].lower()] for m in TOPIC_PATTERN.finditer(text)]
+    if named:
+        return list(dict.fromkeys(named))
+    inferred = classify(text)
+    return [inferred] if inferred else []
+
+
 def normalize_diet_spelling(text):
     return re.sub(r"\bveg(?:itatrian|itarian|eterian)\b", "vegetarian", text, flags=re.IGNORECASE)
 
@@ -277,15 +302,28 @@ def extract_budget(text):
     if re.search(r"\b(?:zero budget|free only|no spending)\b", text):
         return 0
     number = r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?"
+    # A duration beside "budget" belongs to the time field in either word order.
+    money_text = re.sub(
+        r"\b\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m|ghant[ae])\b", " ", text
+    )
     patterns = [
-        r"(?:₹|\brs\.?|\binr|\bbudget(?:\s+(?:of|is))?|\bunder)\s*" + number + r"\b",
+        r"(?:₹|\brs\.?|\binr)\s*" + number + r"\b",
         number + r"\s*(?:rupees?|rs|inr|total|budget|rupaye|bucks)\b",
-        r"\b" + number + r"(?=\s*(?:,|and|aur)\s*\d+\s*(?:hrs?|hours?|minutes?|mins?|ghante)\b)",
+        r"(?:\bbudget(?:\s+(?:of|is))?|\bunder)\s*" + number + r"\b",
     ]
     for pattern in patterns:
-        match = re.search(pattern, text)
+        match = re.search(pattern, money_text)
         if match:
             return amount(match)
+    adjacent = re.search(
+        r"\b" + number + r"(?=\s*(?:,|and|aur)\s*\d+\s*(?:h|hrs?|hours?|minutes?|mins?|ghante)\b)",
+        text,
+    )
+    if adjacent:
+        return amount(adjacent)
+    bare = re.fullmatch(r"\s*" + number + r"\s*", money_text)
+    if bare:
+        return amount(bare)
     return None
 
 
@@ -354,21 +392,21 @@ def local_parse(text):
         normalized,
     )
     for clause in re.split(r"[,.;!?]|\b(?:and|but|with|plus|or|aur)\b", scoped_text):
-        topic = classify(re.sub(NON_VEG, "", clause))
-        if not topic:
+        topics = interest_topics(re.sub(NON_VEG, "", clause))
+        if not topics:
             explicit = re.search(
                 r"(?:interested in|i (?:love|like)|i want to (?:try|do))\s+(.+)", clause
             )
             if explicit:
                 interests.append(explicit[1].strip()[:100])
-        if (
-            topic
-            and re.search(r"\b(?:skip|dislike|avoid|hate|no)\b", clause)
-            and not re.search("crowd", clause)
-        ):
-            constraints.append("avoid " + topic)
-        elif topic and topic not in interests:
-            interests.append(topic)
+        negative = (
+            re.search(r"\b(?:skip|dislike|avoid|hate|no)\b", clause) and "crowd" not in clause
+        )
+        for topic in topics:
+            if negative:
+                constraints.append("avoid " + topic)
+            elif topic not in interests:
+                interests.append(topic)
     group = re.search(
         r"\b(?:for|group of|party of)\s+(\d+)\s*(?:people|persons|adults|of us|friends)?\b(?!\s*(?:min|hour|hr))",
         normalized,

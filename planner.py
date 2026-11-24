@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from itinerary import (
     Brief,
     build_candidates,
+    clock,
     evidence,
     includes_lunch,
     interpret_constraints,
@@ -22,7 +23,14 @@ from itinerary import (
     suitable,
     validate_plan,
 )
-from preferences import EXAMPLES, canonical_city, classify, decode_input, duration, local_parse
+from preferences import (
+    EXAMPLES,
+    canonical_city,
+    decode_input,
+    duration,
+    interest_topics,
+    local_parse,
+)
 from providers import geocode, live_places, model_parse, walk_route
 
 CATALOGUE = json.loads((Path(__file__).parent / "data/places.json").read_text())
@@ -160,12 +168,27 @@ def explain_stop(stop, brief, previous):
             )
     elif indirect and not matches and "music" in indirect and place["kind"] == "bookshop":
         reason = "A nearby vinyl-browsing option for your music interest. Stock varies and there is no confirmed performance."
+    elif {"history", "walks"}.issubset(matches):
+        reason = f"You asked for a heritage walk. This stop gives you {place['minutes']} minutes to explore a historic site on foot."
     elif matches:
         reason = (
             f"{place['name']} gives you {place['minutes']} minutes for " + ", ".join(matches) + "."
         )
     else:
-        reason = f"This {place['kind']} is an alternative in {place['area']}, with {place['minutes']} minutes to explore."
+        benefits = []
+        if place["high"] == 0:
+            benefits.append("the visit is free")
+        if "crowds" in brief.limits.flags and place.get("crowd") == "low":
+            benefits.append("its estimated Saturday crowd is low")
+        if previous and stop["leg"]["minutes"] <= 15:
+            benefits.append(f"it is close to {previous['name']}")
+        reason = (
+            ("An optional stop because " + " and ".join(benefits) + ".")
+            if benefits
+            else (
+                f"An optional {place['minutes']}-minute visit in {place['area']} within your remaining time and budget."
+            )
+        )
     if previous:
         leg = stop["leg"]
         reason += f" It is about {leg['minutes']} minutes from {previous['name']} by " + (
@@ -173,7 +196,18 @@ def explain_stop(stop, brief, previous):
         )
     elif brief.tired and place["kind"] == "park":
         reason += " Start with a short loop and turn back whenever you feel ready."
+    if brief.tired and place.get("short_minutes") == place["minutes"]:
+        reason += f"I used the shorter {place['minutes']}-minute visit to keep the pace gentle."
     return reason
+
+
+def hours_note(place, cause):
+    hours = place.get("hours")
+    if not hours:
+        return f"{place['name']} has unconfirmed hours. The guide uses 10:00–18:00 for planning."
+    if cause == "opens later":
+        return f"{place['name']} opens at {clock(hours[0])}. Try starting at {clock(hours[0])} or later."
+    return f"{place['name']} closes at {clock(hours[1])}. Choose an earlier window for this visit."
 
 
 def alternative_note(tag, places, plan, brief, cache):
@@ -191,15 +225,41 @@ def alternative_note(tag, places, plan, brief, cache):
         _, failure = schedule(stops, legs, brief)
         if failure:
             cause, amount = failure
+            if cause in {"closing time", "opens later"}:
+                return hours_note(choice, cause)
             units = {
                 "budget": f"₹{amount:,} over budget",
                 "time": f"{amount} minutes over your time limit",
-                "closing time": f"{amount} minutes past closing",
-                "opens later": f"{amount} minutes before opening",
             }
             if cause in units:
                 return f"Adding {choice['name']} for {tag} after this route would put it {units[cause]}."
     return f"{cheapest['name']} is another {tag} option. Allow {cheapest['minutes']} minutes and up to ₹{price:,} for the visit."
+
+
+def lower_travel_note(plan, brief, cache, candidates):
+    auto_minutes = sum(s["leg"]["minutes"] for s in plan["stops"] if s["leg"]["mode"] == "auto")
+    if not brief.tired or auto_minutes < 45:
+        return ""
+    message = f"At your requested pace, this route still spends {auto_minutes} minutes in autos."
+    for _, stops in candidates:
+        if len(stops) < 2 or stops[0]["id"] != plan["stops"][0]["place"]["id"]:
+            continue
+        legs = route_legs(stops, brief, cache)
+        transfer = sum(leg["minutes"] for leg in legs)
+        if transfer > min(30, auto_minutes // 2):
+            continue
+        alternative, _ = schedule(stops, legs, brief)
+        if alternative:
+            names = " → ".join(p["name"] for p in stops)
+            lost = [
+                t
+                for t in brief.interests
+                if any(evidence(s["place"], t) == 1 for s in plan["stops"])
+                and not any(evidence(p, t) == 1 for p in stops)
+            ]
+            tradeoff = " This skips the dedicated " + " and ".join(lost) + " stop." if lost else ""
+            return f"{message} A lower-travel option is {names}, with about {transfer} minutes between stops and up to ₹{alternative['high']:,} total.{tradeoff}"
+    return message
 
 
 def finish_plan(plan, brief, places, cache, source, candidates):
@@ -221,6 +281,10 @@ def finish_plan(plan, brief, places, cache, source, candidates):
             "Activities-only alternative. No food stop is included because the sources cannot verify "
             + ", ".join(brief.limits.food_uncertain)
             + ".",
+        )
+    if stops[0]["wait"]:
+        notes.append(
+            f"The first stop opens at {stops[0]['start']}. Its {stops[0]['wait']}-minute wait counts against your window; you can arrive at opening."
         )
     if (
         brief.lunch
@@ -254,22 +318,6 @@ def finish_plan(plan, brief, places, cache, source, candidates):
         notes.append(
             f"This outing uses {plan['total']} of {brief.minutes} minutes. The local search found {free} zero-spend stops among {len(places)} eligible venues; {plan['spare']} minutes remain unscheduled."
         )
-        for _, longer in candidates:
-            extra = [p for p in longer if p["id"] not in {s["place"]["id"] for s in stops}]
-            if not extra or not all(p["high"] == 0 for p in extra):
-                continue
-            alternative, _ = schedule(longer, route_legs(longer, brief, cache), brief)
-            if alternative and alternative["total"] > plan["total"] + 20:
-                addition = extra[0]
-                reason = (
-                    f" Its Saturday crowd level is assumed {addition.get('crowd', 'unknown')}."
-                    if "crowds" in brief.limits.flags
-                    else ""
-                )
-                notes.append(
-                    f"A longer option includes {addition['name']} and uses {alternative['total']} minutes in total.{reason}"
-                )
-                break
     if "crowds" in brief.limits.flags:
         notes.append(
             "Lower estimated Saturday crowds were favoured. Crowd labels are planning assumptions, not live readings."
@@ -279,6 +327,9 @@ def finish_plan(plan, brief, places, cache, source, candidates):
             "Unknown-hours venues use a conservative 10:00–18:00 planning window. Confirm opening before leaving."
         )
     if any(stop["leg"]["mode"] == "auto" for stop in stops):
+        alternative = lower_travel_note(plan, brief, cache, candidates)
+        if alternative:
+            notes.append(alternative)
         rides = [stop["leg"] for stop in stops if stop["leg"]["mode"] == "auto"]
         saved = sum(leg["walk_alternative"] - leg["minutes"] for leg in rides)
         fare = sum(leg["high"] for leg in rides)
@@ -290,7 +341,7 @@ def finish_plan(plan, brief, places, cache, source, candidates):
     notes.append(
         "The return trip is extra."
         + (
-            " The clock starts at the first stop."
+            f" The window starts at {prefs.start_time}. Travel to the first stop is extra."
             if not brief.origin
             else " Travel from the specified starting point is included."
         )
@@ -310,7 +361,7 @@ def finish_plan(plan, brief, places, cache, source, candidates):
     )
 
 
-def explain_failure(closest, brief):
+def explain_failure(closest, brief, places):
     if not closest:
         return "None of the available stops meets your required activities or travel constraints."
     phrases = []
@@ -323,9 +374,15 @@ def explain_failure(closest, brief):
     if "time" in closest:
         gap, name = closest["time"]
         phrases.append(f"{name} needs {gap} more minutes")
+    for cause in ("opens later", "closing time"):
+        if cause in closest:
+            _, name = closest[cause]
+            place = next((p for p in places if p["name"] == name), None)
+            if place:
+                phrases.append(hours_note(place, cause).rstrip("."))
     if not phrases:
-        return "The available venues are closed or unconfirmed at this time. Try an earlier start."
-    return "No outing fits. " + "; ".join(phrases) + "."
+        return "None of the available routes meets your travel or activity requirements."
+    return "No outing fits. " + ". ".join(phrases) + "."
 
 
 async def run_plan(value):
@@ -349,6 +406,13 @@ async def run_plan(value):
             }
             return
         prefs.city = canonical_city(prefs.city)
+        prefs.interests = list(
+            dict.fromkeys(
+                topic
+                for label in prefs.interests
+                for topic in (interest_topics(label) or [label.lower().strip()])
+            )
+        )
         yield event(
             "parse_preferences",
             {"format": method},
@@ -356,6 +420,8 @@ async def run_plan(value):
                 "city": prefs.city,
                 "budget": prefs.budget,
                 "minutes": duration(prefs.available_time),
+                "interests": prefs.interests,
+                "constraints": prefs.constraints,
             },
             method + " interpreted your request.",
         )
@@ -376,9 +442,7 @@ async def run_plan(value):
                 + ". Edit this requirement if it is flexible.",
             )
             return
-        tags = list(
-            dict.fromkeys(classify(tag) or tag.lower().strip() for tag in prefs.interests)
-        ) or ["walks", "food", "art"]
+        tags = prefs.interests or ["walks", "food", "art"]
         tags = [tag for tag in tags if tag not in limits.excluded]
         focused = bool(prefs.interests) and len(tags) == 1 and tags[0] in EXAMPLES
         if focused:
@@ -462,4 +526,4 @@ async def run_plan(value):
             )
             yield finish_plan(plan, brief, places, cache, source, candidates)
             return
-        yield terminal("empty", explain_failure(closest, brief))
+        yield terminal("empty", explain_failure(closest, brief, places))

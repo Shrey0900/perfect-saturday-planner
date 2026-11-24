@@ -58,6 +58,59 @@ class InputTests(unittest.TestCase):
 
 
 class ReviewedPlans(unittest.IsolatedAsyncioTestCase):
+    async def test_budget_preset_visits_bookshop_after_opening(self):
+        plan = (
+            await resolve(
+                "I'm in Bengaluru. I have ₹300 and 90 minutes for books and vegetarian food. Let's take it easy."
+            )
+        )[-1]
+        stops = plan["stops"]
+        self.assertEqual([s["place"]["kind"] for s in stops], ["restaurant", "bookshop"])
+        self.assertEqual(stops[1]["start"], "11:00")
+        self.assertEqual(plan["total"], 90)
+        self.assertLessEqual(plan["high"], 300)
+        self.assertEqual(
+            sum(
+                s["place"]["minutes"] + s["leg"]["minutes"] + s["wait"] + s["buffer"] for s in stops
+            ),
+            90,
+        )
+
+    async def test_budget_position_and_opening_time(self):
+        events = await resolve("bangalore 2000 budget 4 hours i like music")
+        self.assertEqual(events[0]["outputs"]["budget"], 2000)
+        stop = events[-1]["stops"][0]
+        self.assertEqual(
+            (stop["place"]["id"], stop["start"], stop["wait"]), ("blr-ime", "11:00", 60)
+        )
+        self.assertEqual(events[-1]["total"], 150)
+        early = (await resolve(dict(SAMPLE, interests=["art"], start_time="08:00")))[-1]
+        self.assertIn("opens at 10:00", early["message"])
+        late = (await resolve(dict(SAMPLE, start_time="21:00")))[-1]
+        self.assertTrue(any("Cubbon Park closes at 18:00" in n for n in late["notes"]))
+
+    async def test_compound_and_adjacent_topics_visible_in_trace(self):
+        events = await resolve(
+            "I have ₹700 and 3 hours in Delhi. I like heritage walks, books and vegetarian food."
+        )
+        self.assertEqual(events[0]["outputs"]["interests"], ["history", "walks", "books", "food"])
+        self.assertIn("vegetarian", events[0]["outputs"]["constraints"])
+        self.assertEqual(events[-1]["unmatched"], [])
+        self.assertTrue(any("heritage walk" in s["why"] for s in events[-1]["stops"]))
+        events = await resolve("Bangalore 2000 budget 4 hours I like food music and walks")
+        self.assertEqual(events[0]["outputs"]["interests"], ["food", "music", "walks"])
+        self.assertEqual(events[-1]["unmatched"], [])
+
+    async def test_tired_and_low_cost_tradeoffs(self):
+        sample = (await resolve(BANGALORE_EXAMPLE))[-1]
+        self.assertTrue(
+            any("75 minutes in autos" in n and "lower-travel option" in n for n in sample["notes"])
+        )
+        cheap = (await resolve(dict(SAMPLE, budget=100, available_time="8 hours")))[-1]
+        self.assertGreaterEqual(cheap["total"], 164)
+        self.assertEqual(cheap["high"], 0)
+        self.assertTrue(any("the visit is free" in s["why"] for s in cheap["stops"]))
+
     async def test_edited_delhi_brief_keeps_every_stop_about_food(self):
         for text in (
             "I like vegetarian food.",

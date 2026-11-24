@@ -195,10 +195,14 @@ def schedule(stops, legs, brief):
         cursor += travel + buffer
         opening, closing = place.get("hours") or (600, 1080)
         wait = max(0, opening - cursor)
-        if wait > 20:
+        if wait > (60 if not timeline else 30):
             return None, ("opens later", wait)
         cursor += wait
-        end = cursor + place["minutes"]
+        visit = place["minutes"]
+        if "min_minutes" in place:
+            remaining = min(closing, brief.start + brief.minutes) - cursor
+            visit = max(place["min_minutes"], min(visit, remaining))
+        end = cursor + visit
         if end > closing:
             return None, ("closing time", end - closing)
         low += place["low"] * brief.preferences.people + leg["low"]
@@ -206,10 +210,12 @@ def schedule(stops, legs, brief):
         if high > brief.preferences.budget:
             return None, ("budget", high - brief.preferences.budget)
         if end - brief.start > brief.minutes:
+            if wait and end - wait - brief.start <= brief.minutes:
+                return None, ("opens later", wait)
             return None, ("time", end - brief.start - brief.minutes)
         timeline.append(
             {
-                "place": place,
+                "place": place if visit == place["minutes"] else {**place, "minutes": visit},
                 "start": clock(cursor),
                 "end": clock(end),
                 "start_minute": cursor,
@@ -251,11 +257,17 @@ def includes_lunch(plan):
 def priorities(plan, brief):
     places = [stop["place"] for stop in plan["stops"]]
     matches = [max(evidence(place, tag) for place in places) for tag in brief.interests]
-    goal = sum(matches) * 25
+    # A primary match should beat filling the same time with incidental stops.
+    goal = sum(matches) * 25 + 65 * matches.count(1.0)
     for place in places:
-        goal += 4 * max((evidence(place, tag) for tag in brief.interests), default=0)
+        relevance = max((evidence(place, tag) for tag in brief.interests), default=0)
+        goal += 4 * relevance
+        if not relevance and brief.minutes < 300 and place.get("food_role") != "meal":
+            goal -= 18
     visit_minutes = sum(place["minutes"] for place in places)
     goal += 26 * min(visit_minutes / (brief.minutes * (0.68 if brief.tired else 0.82)), 1)
+    if brief.minutes >= 300:
+        goal += 0.35 * min(visit_minutes, 0.65 * brief.minutes)
     goal += len({place["kind"] for place in places}) * 2
     if brief.lunch and includes_lunch(plan):
         goal += 75

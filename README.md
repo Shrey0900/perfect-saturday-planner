@@ -48,7 +48,7 @@ The included guide covers **18 places** in Bengaluru, Gurugram and Delhi. Venue 
 
 Auto fares and journey times are illustrative. The model assumes 1.4× straight-line distance, walking speed of 4.2 km/h, autos at 16 km/h plus pickup time, and at most three passengers per auto. Fares use a range of ₹35 + ₹13/km to ₹65 + ₹23/km per vehicle. All transfer and wait minutes count against the window. Riders should confirm actual fares.
 
-Plans use INR and Saturday in India. An unlabelled duration from 1 through 12 is interpreted as hours. Larger numbers mean minutes. “Half day” means four hours and “evening” means three hours with a 17:00 default start. The form allows an explicit start time. The form defaults to one person at 10:00 IST. Enter the total shared budget. Travel starts at the first stop unless a starting point resolves. The return trip is additional. In guide mode use a named venue as the starting point. A free-text request with an unsupported city or unrecognised intent can be refined in the form.
+Plans use INR and Saturday in India. An unlabelled duration from 1 through 12 is interpreted as hours. Larger numbers mean minutes. “Half day” means four hours and “evening” means three hours with a 17:00 default start. The form allows an explicit start time. The form defaults to one person at 10:00 IST. Enter the total shared budget. Travel starts at the first stop unless a starting point resolves. The return trip is additional. Browsing visits at the two guide bookshops can be shortened to 25 minutes. Waiting for opening is included in the time limit. In guide mode use a named venue as the starting point. A free-text request with an unsupported city or unrecognised intent can be refined in the form.
 
 The initial demo works with its local classifier and city guide. To enable the optional services, set these environment variables on the server and restart:
 
@@ -58,7 +58,7 @@ The initial demo works with its local classifier and city guide. To enable the o
 | OPENAI_MODEL | Optional model override. The default is gpt-5.4-mini. |
 | GEOAPIFY_API_KEY | Indian city geocoding, real-time place lookup and walking-route estimates |
 
-The app uses bounded external requests and a per-process rate limit. On Render’s public ingress it uses its edge-supplied CF-Connecting-IP as the visitor key. Other deployments use the socket peer. It keeps no account or itinerary database. A successful geocoding match and data coverage are required for additional cities. Keys stay on the server.
+The app uses bounded external requests and a per-process rate limit. On Render’s public ingress it uses its edge-supplied CF-Connecting-IP as the visitor key. Other deployments use the socket peer. It keeps no account or itinerary database. A successful geocoding match and data coverage are required for additional cities. Keys stay on the server. `GET /health?details=true` reports whether each integration is configured and which source identified the request for rate limiting. The service logs the source once per worker for each observed mode. Both diagnostics omit key values and IP addresses.
 
 ## Deploy
 
@@ -66,7 +66,7 @@ Create a Render Web Service connected to this repository, or use the supplied Re
 
 ## Reviewer handoff
 
-The GitHub repository is private. Attach the source ZIP itself to the submission or grant the reviewer access to the repository. The public app works without a login. Open it immediately before the demo to wake the free instance.
+The [public GitHub repository](https://github.com/Shrey0900/perfect-saturday-planner) contains the source, tests and run instructions. A ZIP is also available from GitHub’s Code menu. The public app works without a login. Open it immediately before the demo to wake the free instance.
 
 ## AI tools used
 
