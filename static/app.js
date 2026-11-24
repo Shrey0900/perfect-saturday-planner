@@ -29,7 +29,19 @@ const make = (tag, value, cls) => {
     return el;
 };
 let lastPreferences = null;
-let busy = false;
+let activeRequest = null;
+
+function clearPreviousPlan() {
+    activeRequest?.abort();
+    activeRequest = null;
+    lastPreferences = null;
+    output.hidden = true;
+    result.replaceChildren();
+    trace.replaceChildren();
+    document.querySelectorAll('button[type="submit"]').forEach(b => b.disabled = false);
+}
+briefForm.addEventListener("input", clearPreviousPlan);
+fieldsForm.addEventListener("input", clearPreviousPlan);
 
 function formMode(on) {
     briefForm.hidden = on;
@@ -45,6 +57,7 @@ function fillForm(p = {}) {
 }
 
 function edit(p) {
+    clearPreviousPlan();
     fillForm(p);
     formMode(true);
     byId("planner").scrollIntoView();
@@ -54,9 +67,9 @@ function edit(p) {
 }
 
 function sample(text) {
+    clearPreviousPlan();
     formMode(false);
     brief.value = text;
-    lastPreferences = null;
     brief.focus();
     byId("planner").scrollIntoView();
 }
@@ -64,6 +77,7 @@ document.querySelectorAll("[data-sample]").forEach(b => b.onclick = () => sample
 document.querySelectorAll("[data-city]").forEach(b => b.onclick = () => sample(cities[b.dataset.city]));
 byId("toggle-fields").onclick = () => edit(lastPreferences || {});
 byId("toggle-brief").onclick = () => {
+    clearPreviousPlan();
     formMode(false);
     brief.focus();
 };
@@ -173,8 +187,9 @@ function eventReceived(event) {
     }
 }
 async function submit(value) {
-    if (busy) return;
-    busy = true;
+    if (activeRequest) return;
+    const request = new AbortController();
+    activeRequest = request;
     document.querySelectorAll('button[type="submit"]').forEach(b => b.disabled = true);
     output.hidden = false;
     output.focus({
@@ -189,6 +204,7 @@ async function submit(value) {
     try {
         const response = await fetch("/api/plan", {
             method: "POST",
+            signal: request.signal,
             headers: {
                 "Content-Type": "application/json"
             },
@@ -212,7 +228,7 @@ async function submit(value) {
             finished = false;
 
         function receive(line) {
-            if (!line.trim()) return;
+            if (request.signal.aborted || !line.trim()) return;
             const e = JSON.parse(line);
             eventReceived(e);
             if (e.type !== "progress") finished = true;
@@ -230,12 +246,15 @@ async function submit(value) {
         receive(buffer + decoder.decode());
         if (!finished) throw new Error("The connection ended early. Please try again.");
     } catch (e) {
+        if (request.signal.aborted) return;
         byId("result-title").textContent = "Couldn’t finish the plan";
         byId("status").textContent = e instanceof SyntaxError ? "The planner returned an incomplete response. Please try again." : e.message;
         result.append(action(lastPreferences || {}));
     } finally {
-        busy = false;
-        document.querySelectorAll('button[type="submit"]').forEach(b => b.disabled = false);
+        if (activeRequest === request) {
+            activeRequest = null;
+            document.querySelectorAll('button[type="submit"]').forEach(b => b.disabled = false);
+        }
     }
 }
 briefForm.addEventListener("submit", e => {

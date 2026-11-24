@@ -153,6 +153,10 @@ def classify(text):
 Short = Annotated[str, Field(max_length=180)]
 
 
+def normalize_diet_spelling(text):
+    return re.sub(r"\bveg(?:itatrian|itarian|eterian)\b", "vegetarian", text, flags=re.IGNORECASE)
+
+
 class Preferences(BaseModel):
     model_config = ConfigDict(extra="ignore")
     city: Short = ""
@@ -164,6 +168,16 @@ class Preferences(BaseModel):
     start_time: str = "10:00"
     starting_area: Short = ""
     people: int = Field(1, ge=1, le=30)
+
+    @model_validator(mode="after")
+    def read_diet_from_interests(self):
+        # The editable form can put "vegetarian food" in the interests field.
+        for interest in self.interests:
+            label = re.sub(NON_VEG, "", normalize_diet_spelling(interest).lower())
+            diet = re.search(r"\b(pure[ -]veg(?:etarian)?|veg(?:etarian)?|vegan)\b", label)
+            if diet and diet[0] not in self.constraints:
+                self.constraints.append(diet[0])
+        return self
 
     @model_validator(mode="before")
     @classmethod
@@ -276,7 +290,7 @@ def extract_budget(text):
 
 
 def local_parse(text):
-    normalized = normalize_numbers(text)
+    normalized = normalize_diet_spelling(normalize_numbers(text))
     city = next(
         (
             name
@@ -331,7 +345,15 @@ def local_parse(text):
         if re.search(r"only quiet|must (?:be |avoid )?(?:quiet|crowds?)", requirement):
             constraints.append("strictly avoid crowds")
     interests = []
-    for clause in re.split(r"[,.;!?]|\b(?:and|but|with|plus|or|aur)\b", normalized):
+    # Keep the shared negation in "no museums or walks". A new sentence
+    # or a positive clause such as "but I like food" starts a fresh scope.
+    activity_noun = r"(?:walks?|museums?|galleries|parks?|books?|music|food)"
+    scoped_text = re.sub(
+        rf"\b(no|avoid|skip|dislike|hate)\s+({activity_noun})\s+(or|and)\s+(?={activity_noun}\b)",
+        r"\1 \2 \3 \1 ",
+        normalized,
+    )
+    for clause in re.split(r"[,.;!?]|\b(?:and|but|with|plus|or|aur)\b", scoped_text):
         topic = classify(re.sub(NON_VEG, "", clause))
         if not topic:
             explicit = re.search(

@@ -5,7 +5,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from math import ceil
 
-from preferences import DIETARY_UNKNOWN, NON_VEG, classify, duration
+from preferences import DIETARY_UNKNOWN, NON_VEG, classify, duration, normalize_diet_spelling
 from providers import km
 
 
@@ -30,7 +30,7 @@ class Limits:
 def interpret_constraints(preferences):
     limits = Limits()
     for raw in preferences.constraints:
-        item = raw.lower().strip()
+        item = normalize_diet_spelling(raw.lower().strip())
         if not item or item in {"none", "no restrictions", "no constraints"}:
             continue
         if re.search(DIETARY_UNKNOWN, item):
@@ -125,6 +125,7 @@ class Brief:
             and "skip_meals" not in limits.flags
             and "food" not in limits.excluded
             and not limits.food_uncertain
+            and (len(interests) != 1 or "food" in interests or "meal" in limits.required)
         )
         tired = bool(
             re.search(

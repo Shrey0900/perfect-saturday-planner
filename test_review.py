@@ -58,6 +58,43 @@ class InputTests(unittest.TestCase):
 
 
 class ReviewedPlans(unittest.IsolatedAsyncioTestCase):
+    async def test_edited_delhi_brief_keeps_every_stop_about_food(self):
+        for text in (
+            "I like vegetarian food.",
+            "I like only vegitatrian food.",
+            "No museums or walks. Just veg food.",
+        ):
+            with self.subTest(text=text):
+                plan = (await resolve("I have Rs 100 and 3 hours in Delhi. " + text))[-1]
+                self.assertEqual(plan["type"], "plan")
+                self.assertEqual(plan["preferences"]["interests"], ["food"])
+                self.assertIn("vegetarian", plan["preferences"]["constraints"])
+                self.assertEqual([s["place"]["id"] for s in plan["stops"]], ["del-jain-chawal"])
+                self.assertLessEqual(plan["high"], 100)
+                self.assertEqual(plan["spare"], 150)
+
+    async def test_one_interest_never_pads_or_substitutes(self):
+        data = dict(city="Delhi", available_time="3 hours", budget=700, interests="vegetarian food")
+        food = (await resolve(data))[-1]
+        self.assertEqual(food["type"], "plan")
+        self.assertIn("vegetarian", food["preferences"]["constraints"])
+        self.assertTrue(all(stop["place"]["kind"] == "restaurant" for stop in food["stops"]))
+        for changes, blocker in (
+            ({"budget": 50}, "₹75"),
+            ({"budget": 100, "people": 2}, "₹150"),
+            ({"constraints": ["gluten free"]}, "gluten free"),
+            ({"interests": ["music"]}, "music"),
+        ):
+            response = (await resolve({**data, **changes}))[-1]
+            self.assertEqual(response["type"], "empty")
+            self.assertIn(blocker, response["message"])
+        books = (await resolve({**data, "interests": ["books"]}))[-1]
+        self.assertEqual([s["place"]["kind"] for s in books["stops"]], ["bookshop"])
+        lunch = (await resolve({**data, "interests": ["books"], "constraints": ["meal required"]}))[
+            -1
+        ]
+        self.assertEqual({s["place"]["kind"] for s in lunch["stops"]}, {"bookshop", "restaurant"})
+
     async def test_sample_uses_primary_music_and_a_lunch(self):
         events = await resolve(BANGALORE_EXAMPLE)
         plan = events[-1]

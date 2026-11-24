@@ -20,9 +20,10 @@ Open http://127.0.0.1:8000. Run the checks with `python -m unittest -v`. Windows
 ## Try it
 
 - Start with the Bangalore brief in the text box.
+- Edit the Delhi brief to “I have ₹100 and 3 hours in Delhi. I like vegetarian food.” Every stop must match that focus. If none fits the budget, the planner explains the limit.
 - Pick **Under ₹300** or edit a previous plan to 90 minutes. Compare the verified totals and selected places.
 - Try “I’m tired and want to go out.” The planner asks for information and opens an editable form.
-- Try a required live performance or an unverified dietary restriction. The planner explains missing evidence. An unsupported diet returns an explicitly labelled activities-only alternative when suitable places exist.
+- Try a required live performance or an unverified dietary restriction. The planner explains missing evidence. For mixed-interest requests an unsupported diet can yield an explicitly labelled activities-only alternative. A food-only request explains which diet could not be verified.
 - Paste the assignment JSON as written. All six required fields are also available in the form.
 
 ## Planning workflow
@@ -43,7 +44,7 @@ The planner is a bounded hybrid agent. Its coordinator chooses whether to ask a 
 
 ## Data, assumptions and optional integrations
 
-The included guide covers **17 places** in Bengaluru, Gurugram and Delhi. Venue records in `data/places.json` link to their sources. For venues without a published price the displayed range is an estimate. Book browsing excludes purchases. A venue with vegetarian dishes is distinct from an exclusively vegetarian restaurant. Estimated crowd levels are qualitative Saturday planning assumptions. No live attendance or show schedule is inferred. Unknown venue hours are restricted to 10:00–18:00, with a reminder to check. The Blossom listings disagree, so the guide uses their overlapping 11:00–21:00 window.
+The included guide covers **18 places** in Bengaluru, Gurugram and Delhi. Venue records in `data/places.json` link to their sources. For venues without a published price the displayed range is an estimate. Book browsing excludes purchases. A venue with vegetarian dishes is distinct from an exclusively vegetarian restaurant. Estimated crowd levels are qualitative Saturday planning assumptions. No live attendance or show schedule is inferred. Unknown venue hours are restricted to 10:00–18:00, with a reminder to check. The Blossom listings disagree, so the guide uses their overlapping 11:00–21:00 window.
 
 Auto fares and journey times are illustrative. The model assumes 1.4× straight-line distance, walking speed of 4.2 km/h, autos at 16 km/h plus pickup time, and at most three passengers per auto. Fares use a range of ₹35 + ₹13/km to ₹65 + ₹23/km per vehicle. All transfer and wait minutes count against the window. Riders should confirm actual fares.
 

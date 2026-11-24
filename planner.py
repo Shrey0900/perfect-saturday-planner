@@ -22,7 +22,7 @@ from itinerary import (
     suitable,
     validate_plan,
 )
-from preferences import canonical_city, classify, decode_input, duration, local_parse
+from preferences import EXAMPLES, canonical_city, classify, decode_input, duration, local_parse
 from providers import geocode, live_places, model_parse, walk_route
 
 CATALOGUE = json.loads((Path(__file__).parent / "data/places.json").read_text())
@@ -78,7 +78,7 @@ def questions(preferences, value):
     return missing
 
 
-async def find_places(client, preferences, interests, limits):
+async def find_places(client, preferences, interests, limits, *, focused):
     local = [p for p in CATALOGUE if p["city"] == preferences.city]
     starting = preferences.starting_area.strip().casefold()
     match = next((p for p in local if starting and p["name"].casefold() == starting), None)
@@ -97,6 +97,15 @@ async def find_places(client, preferences, interests, limits):
     merged = {p["name"].casefold(): p for p in [*live, *local]}
     records = [{"food_role": "", **place} for place in merged.values()]
     eligible = [place for place in records if suitable(place, limits)]
+    if focused:
+        # A sole interest defines the outing. Only an explicitly required
+        # additional activity (for example, lunch on a books outing) can expand it.
+        eligible = [
+            place
+            for place in eligible
+            if any(evidence(place, topic) == 1 for topic in limits.required)
+            or ("meal" in limits.required and place["food_role"] == "meal")
+        ]
     source = (
         "Live place search and city guide"
         if live and local
@@ -133,8 +142,13 @@ def explain_stop(stop, brief, previous):
     matches = [tag for tag in brief.interests if evidence(place, tag) == 1]
     indirect = [tag for tag in brief.interests if 0 < evidence(place, tag) < 1]
     if place.get("food_role") == "meal":
-        meal_name = "lunch" if 705 <= stop["start_minute"] <= 840 else "a sit-down meal"
-        reason = f"Time for {meal_name} at {stop['start']}. Allow ₹{place['low']}–₹{place['high']} per person."
+        meal_name = "lunch" if 705 <= stop["start_minute"] <= 840 else "a meal"
+        price = (
+            f"₹{place['low']}"
+            if place["low"] == place["high"]
+            else f"₹{place['low']}–₹{place['high']}"
+        )
+        reason = f"Time for {meal_name} at {stop['start']}. Allow {price} per person."
         if brief.limits.diet:
             reason += (
                 " "
@@ -208,7 +222,15 @@ def finish_plan(plan, brief, places, cache, source, candidates):
             + ", ".join(brief.limits.food_uncertain)
             + ".",
         )
-    if brief.lunch and not includes_lunch(plan):
+    if (
+        brief.lunch
+        and not includes_lunch(plan)
+        and any(s["place"].get("food_role") == "meal" for s in stops)
+    ):
+        notes.append(
+            "Your meal falls outside the lunch window. For a midday meal, try starting around noon."
+        )
+    elif brief.lunch and not includes_lunch(plan):
         meals = [p for p in places if p.get("food_role") == "meal"]
         if meals:
             cheapest = min(p["high"] * prefs.people for p in meals)
@@ -217,7 +239,17 @@ def finish_plan(plan, brief, places, cache, source, candidates):
             )
         else:
             notes.append("There is no documented full meal meeting these constraints.")
-    if plan["spare"] >= max(60, brief.minutes * 0.3):
+    if (
+        plan["spare"] >= max(60, brief.minutes * 0.3)
+        and prefs.interests
+        and len(brief.interests) == 1
+        and not unmatched
+    ):
+        notes.append(
+            f"This outing uses {plan['total']} of your {brief.minutes} minutes for {brief.interests[0]}. "
+            f"The remaining {plan['spare']} minutes are free."
+        )
+    elif plan["spare"] >= max(60, brief.minutes * 0.3):
         free = sum(p["high"] == 0 for p in places)
         notes.append(
             f"This outing uses {plan['total']} of {brief.minutes} minutes. The local search found {free} zero-spend stops among {len(places)} eligible venues; {plan['spare']} minutes remain unscheduled."
@@ -278,13 +310,16 @@ def finish_plan(plan, brief, places, cache, source, candidates):
     )
 
 
-def explain_failure(closest):
+def explain_failure(closest, brief):
     if not closest:
         return "None of the available stops meets your required activities or travel constraints."
     phrases = []
     if "budget" in closest:
         gap, name = closest["budget"]
-        phrases.append(f"{name} would take at least ₹{gap:,} more in the estimate")
+        budget = brief.preferences.budget
+        phrases.append(
+            f"The route to {name} has an upper estimate of ₹{budget + gap:,}, which is ₹{gap:,} over your ₹{budget:,} budget"
+        )
     if "time" in closest:
         gap, name = closest["time"]
         phrases.append(f"{name} needs {gap} more minutes")
@@ -317,7 +352,11 @@ async def run_plan(value):
         yield event(
             "parse_preferences",
             {"format": method},
-            {"city": prefs.city, "budget": prefs.budget, "minutes": duration(prefs.available_time)},
+            {
+                "city": prefs.city,
+                "budget": prefs.budget,
+                "minutes": duration(prefs.available_time),
+            },
             method + " interpreted your request.",
         )
 
@@ -341,7 +380,12 @@ async def run_plan(value):
             dict.fromkeys(classify(tag) or tag.lower().strip() for tag in prefs.interests)
         ) or ["walks", "food", "art"]
         tags = [tag for tag in tags if tag not in limits.excluded]
-        places, origin, source, total_found = await find_places(client, prefs, tags, limits)
+        focused = bool(prefs.interests) and len(tags) == 1 and tags[0] in EXAMPLES
+        if focused:
+            limits.required.add(tags[0])
+        places, origin, source, total_found = await find_places(
+            client, prefs, tags, limits, focused=focused
+        )
         yield event(
             "find_places",
             {"city": prefs.city, "interests": tags, "constraints": prefs.constraints},
@@ -355,13 +399,22 @@ async def run_plan(value):
             )
             return
         if not places:
-            msg = (
-                "No eligible venue meets the specified constraints."
-                if total_found
-                else f"No place data available for {prefs.city}. The sourced guides cover "
-                + ", ".join(FALLBACK_CITIES)
-                + "."
-            )
+            if not total_found:
+                msg = (
+                    f"No place data available for {prefs.city}. The sourced guides cover "
+                    + ", ".join(FALLBACK_CITIES)
+                    + "."
+                )
+            elif tags == ["food"] and limits.food_uncertain:
+                msg = (
+                    f"I couldn’t verify a food stop in {prefs.city} for "
+                    + ", ".join(limits.food_uncertain)
+                    + "."
+                )
+            elif prefs.interests and len(tags) == 1:
+                msg = f"I couldn’t find a {tags[0]} stop in the {prefs.city} results that meets your requirements."
+            else:
+                msg = "No eligible venue meets the specified constraints."
             yield terminal("empty", msg)
             return
         if limits.food_uncertain:
@@ -409,4 +462,4 @@ async def run_plan(value):
             )
             yield finish_plan(plan, brief, places, cache, source, candidates)
             return
-        yield terminal("empty", explain_failure(closest))
+        yield terminal("empty", explain_failure(closest, brief))
