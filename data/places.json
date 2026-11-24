@@ -159,7 +159,16 @@
       1260
     ],
     "hours_source": "https://in.worldorgs.com/catalog/bengaluru/book-store/blossoms-book-house",
-    "hours_note": "Branch listings disagree. The planner uses the overlapping 11:00–21:00 window."
+    "hours_note": "Branch listings disagree. The planner uses the overlapping 11:00–21:00 window.",
+    "interest_notes": [
+      {
+        "match": "incidental",
+        "topics": [
+          "music"
+        ],
+        "text": "For music, ask the bookshop about its vinyl selection. Stock varies."
+      }
+    ]
   },
   {
     "id": "blr-kcdas",
@@ -406,7 +415,17 @@
       "history",
       "walks"
     ],
-    "crowd": "high"
+    "crowd": "high",
+    "interest_notes": [
+      {
+        "match": "primary",
+        "topics": [
+          "history",
+          "walks"
+        ],
+        "text": "For your heritage walk, explore the old stepwell on foot and look down from the upper level."
+      }
+    ]
   },
   {
     "id": "del-oxford",

@@ -86,8 +86,38 @@ COUNTS = {label: Counter(tokens(" ".join(phrases))) for label, phrases in EXAMPL
 VOCAB = set().union(*COUNTS.values())
 
 
-ALIASES = {
-    "fine dining": "fine dining",
+def infer_topic(text):
+    """Score known words with smoothed multinomial Naive Bayes and abstain on weak evidence."""
+    terms = [t for t in tokens(text) if t in VOCAB]
+    if not terms:
+        return None
+    scores = {}
+    smoothing = 0.25
+    for label, counts in COUNTS.items():
+        denominator = sum(counts.values()) + smoothing * len(VOCAB)
+        scores[label] = sum(math.log((counts[term] + smoothing) / denominator) for term in terms)
+    top, second = sorted(scores, key=scores.get, reverse=True)[:2]
+    return top if scores[top] - scores[second] > 0.45 else None
+
+
+KNOWN_TOPICS = frozenset(
+    (
+        "food",
+        "walks",
+        "art",
+        "books",
+        "music",
+        "history",
+        "fine dining",
+        "trekking",
+        "nightlife",
+        "shopping",
+    )
+)
+
+# Recover explicit topic names before asking the single-label classifier to
+# interpret an ambiguous phrase. Preserve the order the visitor mentioned them.
+TOPIC_NAMES = {
     "night life": "nightlife",
     "ghoomna": "walks",
     "tehelna": "walks",
@@ -101,30 +131,7 @@ ALIASES = {
     "किताब": "books",
     "खाना": "food",
     "संगीत": "music",
-}
-
-
-def classify(text):
-    """Score known words with smoothed multinomial Naive Bayes and abstain on weak evidence."""
-    for phrase, topic in ALIASES.items():
-        if re.search(r"\b" + phrase + r"\b", text, re.IGNORECASE):
-            return topic
-    terms = [t for t in tokens(text) if t in VOCAB]
-    if not terms:
-        return None
-    scores = {}
-    smoothing = 0.25
-    for label, counts in COUNTS.items():
-        denominator = sum(counts.values()) + smoothing * len(VOCAB)
-        scores[label] = sum(math.log((counts[term] + smoothing) / denominator) for term in terms)
-    top, second = sorted(scores, key=scores.get, reverse=True)[:2]
-    return top if scores[top] - scores[second] > 0.45 else None
-
-
-# Recover explicit topic names before asking the single-label classifier to
-# interpret an ambiguous phrase. Preserve the order the visitor mentioned them.
-TOPIC_NAMES = {
-    **{topic: topic for topic in EXAMPLES},
+    **{topic: topic for topic in KNOWN_TOPICS},
     "heritage": "history",
     "walk": "walks",
     "walking": "walks",
@@ -137,10 +144,21 @@ TOPIC_NAMES = {
 TOPIC_PATTERN = re.compile(r"\b(?:" + "|".join(map(re.escape, TOPIC_NAMES)) + r")\b", re.I)
 
 
+def named_topics(text):
+    """Return explicit topics in the order the visitor mentioned them."""
+    return list(dict.fromkeys(TOPIC_NAMES[m[0].lower()] for m in TOPIC_PATTERN.finditer(text)))
+
+
 def interest_topics(text):
     """Preserve every explicitly named topic, then try the classifier for an unnamed activity."""
-    named = [TOPIC_NAMES[m[0].lower()] for m in TOPIC_PATTERN.finditer(text)]
+    named = named_topics(text)
     if named:
-        return list(dict.fromkeys(named))
-    inferred = classify(text)
+        return named
+    inferred = infer_topic(text)
     return [inferred] if inferred else []
+
+
+def classify(text):
+    """Return one topic for a restriction or short label."""
+    topics = interest_topics(text)
+    return topics[0] if topics else None

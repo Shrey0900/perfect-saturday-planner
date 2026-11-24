@@ -5,9 +5,10 @@ from unittest.mock import patch
 
 from starlette.requests import Request
 
-from constraints import interpret_constraints
+from constraints import Diet, interpret_constraints
 from interests import classify
-from itinerary import Brief, priorities, schedule
+from itinerary import Brief, schedule
+from scoring import priorities
 from main import visitor_key
 from planner import run_plan
 from preferences import Preferences, duration, local_parse
@@ -23,9 +24,9 @@ class InputTests(unittest.TestCase):
     def test_diet_negation_in_text_and_structured_input(self):
         for text in ("non-vegetarian", "I eat non-veg", "non veg", "not a vegetarian"):
             with self.subTest(text=text):
-                self.assertEqual(interpret_constraints(local_parse(text)).diet, "")
-                self.assertEqual(interpret_constraints(Preferences(constraints=[text])).diet, "")
-        self.assertEqual(interpret_constraints(local_parse("pure veg only")).diet, "only")
+                self.assertEqual(interpret_constraints(local_parse(text)).diet, None)
+                self.assertEqual(interpret_constraints(Preferences(constraints=[text])).diet, None)
+        self.assertEqual(interpret_constraints(local_parse("pure veg only")).diet, Diet.PURE_VEG)
 
     def test_budgets_and_durations(self):
         for text, wanted in [("2000 total", 2000), ("1500 and 3 hrs", 1500), ("2k budget", 2000)]:
@@ -63,7 +64,8 @@ class ReviewedPlans(unittest.IsolatedAsyncioTestCase):
     async def test_budget_preset_visits_bookshop_after_opening(self):
         plan = (
             await resolve(
-                "I'm in Bengaluru. I have ₹300 and 90 minutes for books and vegetarian food. Let's take it easy."
+                "I'm in Bengaluru. I have ₹300 and 90 minutes for books and vegetarian food. "
+                "Let's take it easy."
             )
         )[-1]
         stops = plan["stops"]
@@ -235,7 +237,7 @@ class ReviewedPlans(unittest.IsolatedAsyncioTestCase):
         leg = {"mode": "walk", "minutes": 0, "low": 0, "high": 0}
         quiet, _ = schedule([venue], [leg], brief)
         busy, _ = schedule([{**venue, "crowd": "high"}], [leg], brief)
-        self.assertGreater(priorities(quiet, brief), priorities(busy, brief))
+        self.assertGreater(priorities(quiet, brief).total, priorities(busy, brief).total)
 
     async def test_unconfirmed_hours_late_guard(self):
         prefs = Preferences(**dict(SAMPLE, start_time="20:30"))
@@ -243,3 +245,76 @@ class ReviewedPlans(unittest.IsolatedAsyncioTestCase):
         venue = {"kind": "bookshop", "minutes": 35, "low": 0, "high": 0}
         _, failure = schedule([venue], [{"mode": "walk", "minutes": 0, "low": 0, "high": 0}], brief)
         self.assertEqual(failure[0], "closing time")
+
+
+class TraceAndProviderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_winner_score_and_spacing(self):
+        events = await resolve(BANGALORE_EXAMPLE)
+        rank = next(e["outputs"] for e in events if e.get("tool") == "build_candidates")
+        validation = events[-2]["outputs"]
+        score = validation["validated_score"]
+        self.assertAlmostEqual(sum(score["components"].values()), score["total"], places=2)
+        self.assertEqual(score["components"]["coverage"], 270)
+        self.assertEqual(score["components"]["lunch"], 75)
+        self.assertEqual(validation["provisional_rank_score"], rank["top_routes"][0]["score"])
+        self.assertEqual(rank["top_routes"][0]["stops"], events[-2]["inputs"]["stops"])
+        music = next(s for s in events[-1]["stops"] if s["place"]["id"] == "blr-ime")
+        self.assertIn("by auto. I used the shorter", music["why"])
+
+    def test_interest_is_counted_once_per_route(self):
+        from scoring import interest_points
+
+        prefs = Preferences(**dict(SAMPLE, interests=["music"]))
+        brief = Brief.create(prefs, interpret_constraints(prefs))
+        primary = {"tags": ["music"], "primary_tags": ["music"]}
+        incidental = {"tags": ["music", "books"], "primary_tags": ["books"]}
+        self.assertEqual(interest_points([incidental], brief)[0], 7)
+        coverage, relevance = interest_points([primary, primary], brief)
+        self.assertEqual((coverage, relevance), (90, 8))
+
+    def test_same_rules_for_explicit_and_free_text(self):
+        from constraints import Flag
+
+        for phrase, flag in [
+            ("no stairs", Flag.ACCESSIBLE),
+            ("no outdoors", Flag.INDOORS),
+            ("no indoors", Flag.OUTDOORS),
+            ("no autos", Flag.WALK_ONLY),
+            ("avoid crowds", Flag.CROWDS),
+        ]:
+            with self.subTest(phrase=phrase):
+                structured = interpret_constraints(Preferences(constraints=[phrase]))
+                free = interpret_constraints(local_parse(phrase))
+                self.assertEqual(structured.flags, free.flags)
+                self.assertIn(flag, free.flags)
+        self.assertFalse(interpret_constraints(local_parse("I like live music")).unsupported)
+        self.assertTrue(interpret_constraints(local_parse("live music required")).unsupported)
+
+    async def test_bad_provider_data_and_local_programming_error(self):
+        import httpx
+        from unittest.mock import AsyncMock
+
+        from providers import ProviderDataError, live_places, walk_route
+
+        transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"results": {}}))
+        with patch.dict("os.environ", {"GEOAPIFY_API_KEY": "test"}):
+            async with httpx.AsyncClient(transport=transport) as client:
+                with self.assertRaises(ProviderDataError):
+                    await walk_route(client, [(1, 2), (3, 4)])
+                with patch("providers.nearby", new=AsyncMock(side_effect=TypeError("local bug"))):
+                    with self.assertRaisesRegex(TypeError, "local bug"):
+                        await live_places(client, Preferences(), (1, 2), ["art"], None)
+
+    async def test_category_outage_preserves_other_live_results(self):
+        import httpx
+
+        from providers import live_places
+
+        async def sample_category(client, preferences, centre, kind, diet):
+            if kind == "museum":
+                raise httpx.ReadTimeout("timeout")
+            return [{"name": "Gallery"}]
+
+        with patch("providers.nearby", sample_category), self.assertLogs("providers", "WARNING"):
+            places = await live_places(None, Preferences(), (1, 2), ["art"], None)
+        self.assertEqual(places, [{"name": "Gallery"}])

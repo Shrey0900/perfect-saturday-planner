@@ -96,8 +96,12 @@ function eventReceived(event) {
   if (event.type === "progress") {
     const item = make("li", event.message);
     const details = make("details");
+    const score = event.outputs?.validated_score;
+    const label = score
+      ? `validate_plan · why this route scored ${score.total} points`
+      : event.tool + " · inputs and outputs";
     details.append(
-      make("summary", event.tool + " · inputs and outputs"),
+      make("summary", label),
       make(
         "pre",
         JSON.stringify(

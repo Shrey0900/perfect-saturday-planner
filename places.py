@@ -1,13 +1,13 @@
-"""Find venues and estimate transfers, using the sourced guide when live lookups fail."""
+"""Find venues, using the sourced guide when live lookups fail."""
 
 import json
-import os
 from pathlib import Path
 from typing import NamedTuple
 
 from constraints import suitable
-from itinerary import evidence, position, route_legs
-from providers import PROVIDER_ERRORS, geocode, live_places, walk_route
+from scoring import evidence
+from routing import position
+from providers import PROVIDER_ERRORS, geocode, live_data_enabled, live_places
 
 
 class PlaceSearch(NamedTuple):
@@ -24,7 +24,7 @@ FALLBACK_CITIES = sorted({place["city"] for place in CATALOGUE})
 
 
 async def find_places(client, preferences, interests, limits, *, focused):
-    """Merge nearby results and the city guide, then apply the visitor’s hard constraints.
+    """Merge nearby results and the city guide, then apply the visitor's hard constraints.
 
     Guide records win when both sources name the same place. A single explicit
     interest limits the search to matching venues and required activities."""
@@ -33,7 +33,7 @@ async def find_places(client, preferences, interests, limits, *, focused):
     match = next((p for p in local if starting and p["name"].casefold() == starting), None)
     origin = position(match) if match else None
     live = []
-    if os.getenv("GEOAPIFY_API_KEY"):
+    if live_data_enabled():
         try:
             centre = origin or await geocode(client, preferences.city, preferences.starting_area)
             if starting:
@@ -61,30 +61,6 @@ async def find_places(client, preferences, interests, limits, *, focused):
     return PlaceSearch(eligible, origin, source, len(records))
 
 
-async def estimate_route(client, stops, brief, local_cache, lookups):
-    """Copy the candidate’s local estimates and refine up to three walking legs per request.
-
-    Cache both successful and failed lookups so another candidate can reuse them."""
-    legs = [dict(leg) for leg in route_legs(stops, brief, local_cache)]
-    previous = brief.origin
-    for stop, leg in zip(stops, legs):
-        end = position(stop)
-        key = (previous, end)
-        if os.getenv("GEOAPIFY_API_KEY") and leg["mode"] == "walk" and leg["minutes"]:
-            if key not in lookups and len(lookups) < 3:
-                try:
-                    result = await walk_route(client, [previous, end])
-                    lookups[key] = result[0] if result else None
-                except PROVIDER_ERRORS:
-                    lookups[key] = None
-            if lookups.get(key) is not None:
-                leg.update(minutes=lookups[key], source="Geoapify walking route")
-            elif key in lookups:
-                leg["source"] = "local walking estimate; live route unavailable"
-        previous = end
-    return legs
-
-
 def no_places_message(search, preferences, interests, limits):
     """Explain whether the city, a dietary requirement or an interest blocked all venues."""
     if not search.total_found:
@@ -95,10 +71,13 @@ def no_places_message(search, preferences, interests, limits):
         )
     if interests == ["food"] and limits.food_uncertain:
         return (
-            f"I couldn’t verify a food stop in {preferences.city} for "
+            f"I couldn't verify a food stop in {preferences.city} for "
             + ", ".join(limits.food_uncertain)
             + "."
         )
     if preferences.interests and len(interests) == 1:
-        return f"I couldn’t find a {interests[0]} stop in the {preferences.city} results that meets your requirements."
+        return (
+            f"I couldn't find a {interests[0]} stop in the {preferences.city} results that meets "
+            "your requirements."
+        )
     return "No eligible venue meets the specified constraints."

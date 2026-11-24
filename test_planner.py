@@ -9,7 +9,10 @@ from main import app
 from planner import run_plan
 from preferences import duration, local_parse
 
-BANGALORE_EXAMPLE = "I'm in Bangalore with ₹2,000 and 4 hours. I'm tired but want to get out. I like food, music and walks. I'm vegetarian and want to avoid crowded places."
+BANGALORE_EXAMPLE = (
+    "I'm in Bangalore with ₹2,000 and 4 hours. I'm tired but want to get out. I like food, music "
+    "and walks. I'm vegetarian and want to avoid crowded places."
+)
 
 SAMPLE = {
     "city": "Bangalore",
@@ -106,7 +109,7 @@ class PlannerTests(unittest.IsolatedAsyncioTestCase):
             patch.dict("os.environ", {"OPENAI_API_KEY": "test", "GEOAPIFY_API_KEY": "test"}),
             patch("planner.model_parse", new=AsyncMock(side_effect=httpx.ReadTimeout("timeout"))),
             patch("places.geocode", new=AsyncMock(side_effect=httpx.ReadTimeout("timeout"))),
-            patch("places.walk_route", new=AsyncMock(side_effect=httpx.ReadTimeout("timeout"))),
+            patch("routing.walk_route", new=AsyncMock(side_effect=httpx.ReadTimeout("timeout"))),
         ):
             events = [
                 e async for e in run_plan(dict(SAMPLE, constraints=["vegetarian", "walking only"]))

@@ -35,6 +35,8 @@ Start in [planner.py](planner.py) at `run_plan`. It reads the brief, asks for mi
 | How does “₹300, 90 minutes, books and vegetarian food” become usable input? | [preferences.py](preferences.py) extracts the budget, time and diet. [interests.py](interests.py) recognises activity names and classifies less explicit phrases. |
 | Why is a place eligible? | [constraints.py](constraints.py) turns requirements into venue checks. [places.py](places.py) applies them to the city guide and optional live results. [providers.py](providers.py) handles external API calls. |
 | Why does the ₹300 route wait for the bookshop to open? | In [itinerary.py](itinerary.py), `schedule` adds travel, buffers, opening waits and visits. `build_candidates` ranks feasible routes, and `validate_plan` runs the same arithmetic with the final travel estimates. |
+| What assumptions decide walk versus auto? | [routing.py](routing.py) names the walking speed, fare range, pickup time and party size per auto. |
+| Why did this route rank first? | [scoring.py](scoring.py) returns signed points per component. Expand the final validation event in the trace to see them. |
 | Where do the user-facing reasons and the trace come from? | [explanations.py](explanations.py) uses the accepted route to describe each stop and its trade-offs. [main.py](main.py) streams the events emitted by the coordinator. |
 | How does the browser show the plan as it arrives? | [app.js](static/app.js) handles form and result state. [planner-api.js](static/planner-api.js) reads complete events from the stream. [plan-view.js](static/plan-view.js) renders the itinerary. |
 
@@ -49,6 +51,24 @@ Start in [planner.py](planner.py) at `run_plan`. It reads the brief, asks for mi
 | `validate_plan` | Recheck each chosen route with its final transfer estimates, buffers, waiting and visit time. Apply upper fares and charges for the entire party. Return numeric timing or spending blockers when available. |
 
 FastAPI serves the frontend and a streaming `POST /api/plan` endpoint. Each newline-delimited JSON event is a completed tool action or a terminal plan, clarification or no-match result. `GET /health` reports readiness.
+
+### Explaining the ranking in a demo
+
+Budget, available time, opening hours and explicit requirements determine which routes qualify.
+For each requested interest, a route earns 90 coverage points for a dedicated venue or 7 for
+an incidental match. Each interest counts once. Individual stops can earn up to 4 additional
+points for relevance. These are hand-tuned product weights. They give a dedicated music visit
+enough weight to justify a longer transfer when the visitor has the time and money.
+
+Try `Bangalore 2000 budget 4 hours I like food music and walks` with the city guide. With a
+25-point primary weight the winner used Blossom Book House for its incidental music tag.
+At 90 the Indian Music Experience wins a place on the route. Both runs use the same venues,
+constraints and travel estimates. The tired-user preset visits the music museum at both weights.
+
+Open the planner trace, then expand `validate_plan`. The provisional score ranked the route
+using local transfers. The validated breakdown uses final travel times and shows coverage,
+stop relevance, visit time, variety, lunch, crowds, travel, waiting and cost. The service
+accepts the first route in provisional order that still passes validation.
 
 ### Why a fixed workflow?
 

@@ -1,95 +1,222 @@
-"""Convert user restrictions into checks shared by place discovery and scheduling."""
+"""Recognise constraints in text and enforce the same rules on structured input."""
 
 import re
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from interests import classify
-from preferences import DIETARY_UNKNOWN, NON_VEG, normalize_diet_spelling
+
+
+class Flag(StrEnum):
+    ACCESSIBLE = "accessible"
+    NO_WALK = "no_walk"
+    WALK_ONLY = "walk_only"
+    CROWDS = "crowds"
+    SKIP_MEALS = "skip_meals"
+    INDOORS = "indoors"
+    OUTDOORS = "outdoors"
+
+
+class Diet(StrEnum):
+    VEG_FRIENDLY = "veg_friendly"
+    PURE_VEG = "pure_veg"
+    VEGAN = "vegan"
+
+
+# These short codes are the venue catalogue's published wire format.
+VENUE_DIET_CODE = {Diet.VEGAN: "vegan", Diet.PURE_VEG: "only", Diet.VEG_FRIENDLY: "options"}
+ALLOWED_VENUE_DIETS = {
+    Diet.VEGAN: {"vegan"},
+    Diet.PURE_VEG: {"only"},
+    Diet.VEG_FRIENDLY: set(VENUE_DIET_CODE.values()),
+}
+NON_VEG = r"\b(?:non[ -]?veg(?:etarian)?s?|not (?:a )?vegetarian)\b"
+UNVERIFIED_DIET = r"allerg|gluten|nut[ -]?free|halal|kosher|lactose|jain"
+UNVERIFIED_ACCESS = r"pet.friendly|dog.friendly|stroller"
+
+
+def normalize_diet_spelling(text):
+    return re.sub(r"\bveg(?:itatrian|itarian|eterian)\b", "vegetarian", text, flags=re.I)
+
+
+@dataclass(frozen=True)
+class Rule:
+    """Common wording plus optional shorthand used inside the explicit constraints field."""
+
+    label: str
+    pattern: str
+    flag: Flag | None = None
+    diet: Diet | None = None
+    structured: str = ""
+    unsupported: str = ""
+    required: str = ""
+
+    def matches(self, text, explicit=False):
+        return bool(
+            text == self.label
+            or re.search(self.pattern, text)
+            or (explicit and self.structured and re.search(self.structured, text))
+        )
+
+
+RULES = (
+    Rule("vegan", r"\bvegan\b", diet=Diet.VEGAN),
+    Rule(
+        "pure vegetarian",
+        r"pure[\s-]*veg|veg(?:etarian)?[\s-]*only",
+        diet=Diet.PURE_VEG,
+        structured=r"^only vegetarian$",
+    ),
+    Rule("vegetarian", r"\bveg(?:etarian)?\b", diet=Diet.VEG_FRIENDLY),
+    Rule(
+        "strictly avoid crowds",
+        r"only quiet|must (?:be |avoid )?(?:quiet|crowds?)",
+        structured=r"(?:must|only|guarantee|strictly).*?(?:crowd|quiet|peaceful)",
+        unsupported="confirmed quiet conditions",
+    ),
+    Rule(
+        "avoid crowds",
+        r"(?:avoid|hate|no|away from|skip) crowds?|uncrowded|crowded places|quiet places",
+        Flag.CROWDS,
+        structured=r"crowd|quiet|peaceful",
+    ),
+    Rule(
+        "indoors only",
+        r"indoors? only|stay indoors|no outdoors?|avoid (?:the )?(?:heat|sun|outdoors?)",
+        Flag.INDOORS,
+        structured=r"^indoors?$",
+    ),
+    Rule("outdoors only", r"outdoors? only|no indoors?", Flag.OUTDOORS, structured=r"^outdoors?$"),
+    Rule(
+        "wheelchair access",
+        r"wheelchair|step[ -]?free|accessible entrance|no stairs",
+        Flag.ACCESSIBLE,
+    ),
+    Rule("no walking", r"no walking|can't walk|cannot walk|no walks", Flag.NO_WALK),
+    Rule("walking only", r"walk(?:ing)? only|no (?:cabs?|autos?|taxis?)", Flag.WALK_ONLY),
+    Rule("skip meals", r"(?:skip|no|without) (?:lunch|meals?|food)\b", Flag.SKIP_MEALS),
+    Rule(
+        "meal required",
+        r"(?:must|need|want|have to)(?: to)? (?:have|get|eat|include|grab)?"
+        r"\s*(?:a |some )?(?:meal|lunch|dinner|breakfast|food)\b",
+        required="meal",
+    ),
+    Rule(
+        "live performance required",
+        r"live (?:music|performance|show|gig) (?:is a must|only|required)"
+        r"|must (?:have|include) live music",
+        structured=r"live (?:music|performance|show|gig)",
+        unsupported="a confirmed performance this Saturday",
+    ),
+)
+MEAT_REQUIRED = (
+    r"(?:only|must|require)\b.{0,14}non[ -]?veg|non[ -]?veg(?:etarian)? (?:only|required)"
+)
+
+
+def diet_labels(text):
+    """Find the strongest dietary preference in a phrase after masking negated mentions."""
+    text = re.sub(NON_VEG, "", normalize_diet_spelling(text.lower()))
+    for rule in RULES:
+        if rule.diet and rule.matches(text):
+            return [rule.label]
+    return []
+
+
+def extract_constraints(text):
+    """Extract only explicit restrictions from a whole brief, keeping unverifiable wording."""
+    labels = diet_labels(text)
+    if re.search(MEAT_REQUIRED, text):
+        labels.append("meat required")
+    labels.extend(rule.label for rule in RULES if not rule.diet and rule.matches(text))
+    for fragment in re.split(r"[,.;!?]|\b(?:and|but)\b", text):
+        if re.search(UNVERIFIED_DIET, fragment) or re.search(UNVERIFIED_ACCESS, fragment):
+            labels.append(fragment.strip()[:160])
+    return list(dict.fromkeys(labels))
 
 
 @dataclass
 class Limits:
-    """Venue filters, required activities and restrictions the guide cannot verify."""
+    """Hard venue filters and any dietary or other requirements that lack evidence."""
 
-    diet: str = ""
-    excluded: set = field(default_factory=set)
-    required: set = field(default_factory=set)
-    flags: set = field(default_factory=set)
-    food_uncertain: list = field(default_factory=list)
-    unsupported: list = field(default_factory=list)
+    diet: Diet | None = None
+    excluded: set[str] = field(default_factory=set)
+    required: set[str] = field(default_factory=set)
+    flags: set[Flag] = field(default_factory=set)
+    food_uncertain: list[str] = field(default_factory=list)
+    unsupported: list[str] = field(default_factory=list)
+
+
+def apply_rule(rule, limits):
+    if rule.diet:
+        strength = (None, Diet.VEG_FRIENDLY, Diet.PURE_VEG, Diet.VEGAN)
+        if strength.index(rule.diet) > strength.index(limits.diet):
+            limits.diet = rule.diet
+    if rule.flag:
+        limits.flags.add(rule.flag)
+    if rule.required:
+        limits.required.add(rule.required)
+    if rule.unsupported:
+        limits.unsupported.append(rule.unsupported)
+
+
+def apply_constraint(raw, limits):
+    """Resolve one entry, preserving restrictions that the venue records cannot verify."""
+    item = normalize_diet_spelling(raw.lower().strip())
+    if not item or item in {"none", "no restrictions", "no constraints"}:
+        return
+    if re.search(UNVERIFIED_DIET, item):
+        limits.food_uncertain.append(raw)
+        return
+    if item == "meat required" or re.search(MEAT_REQUIRED, item):
+        limits.food_uncertain.append("a confirmed non-vegetarian meal")
+        return
+    if re.search(NON_VEG, item):
+        item = re.sub(NON_VEG, "", item).strip()
+        if not any(rule.matches(item, explicit=True) for rule in RULES):
+            return
+    rules = [rule for rule in RULES if rule.matches(item, explicit=True)]
+    if rules:
+        for rule in rules:
+            apply_rule(rule, limits)
+        return
+    topic = classify(item)
+    if topic and re.search(r"\b(no|avoid|skip|dislike)\b", item):
+        limits.excluded.add(topic)
+    elif topic and re.search(r"\b(must|need|include|mandatory|required)\b", item):
+        limits.required.add("meal" if topic == "food" else topic)
+    else:
+        limits.unsupported.append(raw)
 
 
 def interpret_constraints(preferences):
-    """Translate visitor wording into restrictions used by venue search and final validation."""
+    """Apply shared rules and offer activities only when a diet cannot be verified."""
     limits = Limits()
     for raw in preferences.constraints:
-        item = normalize_diet_spelling(raw.lower().strip())
-        if not item or item in {"none", "no restrictions", "no constraints"}:
-            continue
-        if re.search(DIETARY_UNKNOWN, item):
-            limits.food_uncertain.append(raw)
-            continue
-        if re.search(NON_VEG, item) or item == "meat required":
-            if re.search(r"\bonly\b|\bmust\b|\brequired?\b", item):
-                limits.food_uncertain.append("a confirmed non-vegetarian meal")
-            item = re.sub(NON_VEG, "", item)
-            if not re.search(r"\bveg(?:etarian)?\b", item):
-                continue
-        if "vegan" in item:
-            limits.diet = "vegan"
-        elif re.search(r"pure[ -]?veg|veg(?:etarian)?[ -]?only|only vegetarian", item):
-            if limits.diet != "vegan":
-                limits.diet = "only"
-        elif re.search(r"\bveg(?:etarian)?\b", item):
-            if not limits.diet:
-                limits.diet = "options"
-        elif re.search("wheelchair|step.free|accessible entrance|no stairs", item):
-            limits.flags.add("accessible")
-        elif re.search("no walking|cannot walk|can't walk|no walks", item):
-            limits.flags.add("no_walk")
-        elif re.search("walking only|walk only|no (cabs?|autos?|taxis?)", item):
-            limits.flags.add("walk_only")
-        elif re.search("crowd|quiet|peaceful", item):
-            limits.flags.add("crowds")
-            if re.search("must|only|guarantee|strictly", item):
-                limits.unsupported.append("confirmed quiet conditions")
-        elif re.search("live (music|performance|show|gig)", item):
-            limits.unsupported.append("a confirmed performance this Saturday")
-        elif "skip meals" in item or re.search("no (lunch|meals?|food)", item):
-            limits.flags.add("skip_meals")
-        elif re.search("indoors?|avoid (?:the )?(?:heat|sun|outdoors?)", item):
-            limits.flags.add("indoors")
-        elif "outdoor" in item:
-            limits.flags.add("outdoors")
-        elif re.search(r"\b(no|avoid|skip|dislike)\b", item) and (topic := classify(item)):
-            limits.excluded.add(topic)
-        elif re.search(r"meal required|\b(must|need|include|mandatory|required)\b", item) and (
-            target := classify(item)
-        ):
-            limits.required.add("meal" if target == "food" else target)
-        else:
-            limits.unsupported.append(raw)
+        apply_constraint(raw, limits)
+    if limits.food_uncertain:
+        limits.required.discard("meal")
     return limits
 
 
 def suitable(place, limits):
-    """Check one venue against diet, access, exclusions and indoor or outdoor restrictions."""
+    """Check the venue before any travel or budget calculations."""
     tags = set(place["tags"])
     if limits.excluded.intersection(tags):
         return False
-    if "accessible" in limits.flags and not (
+    if Flag.ACCESSIBLE in limits.flags and not (
         place.get("accessible") or place.get("wheelchair") is True
     ):
         return False
-    if "indoors" in limits.flags and ("outdoors" in tags or place["kind"] == "park"):
+    outdoors = "outdoors" in tags or place["kind"] == "park"
+    if Flag.INDOORS in limits.flags and outdoors:
         return False
-    if "outdoors" in limits.flags and "outdoors" not in tags and place["kind"] != "park":
+    if Flag.OUTDOORS in limits.flags and not outdoors:
         return False
-    if "no_walk" in limits.flags and ("walks" in tags or place["kind"] == "park"):
+    if Flag.NO_WALK in limits.flags and ("walks" in tags or place["kind"] == "park"):
         return False
     if place["kind"] == "restaurant":
-        if limits.food_uncertain or "skip_meals" in limits.flags:
+        if limits.food_uncertain or Flag.SKIP_MEALS in limits.flags:
             return False
-        allowed = {"vegan": {"vegan"}, "only": {"only"}, "options": {"only", "options", "vegan"}}
-        return not limits.diet or place["veg"] in allowed[limits.diet]
+        return not limits.diet or place["veg"] in ALLOWED_VENUE_DIETS[limits.diet]
     return True

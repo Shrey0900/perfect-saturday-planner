@@ -1,14 +1,23 @@
-"""Stream the five planning tools in order, ending with a plan, clarification, or no-match result."""
+"""Stream planning tools in order, ending with a plan, clarification or no-match result."""
 
 import httpx
 from pydantic import ValidationError
 
 from constraints import interpret_constraints
 from explanations import explain_failure, finish_plan
-from interests import EXAMPLES, interest_topics
+from interests import interest_topics
 from itinerary import Brief, build_candidates, record_closest_failure, validate_plan
-from places import estimate_route, find_places, no_places_message
-from preferences import canonical_city, decode_input, duration, local_parse, questions
+from places import find_places, no_places_message
+from routing import estimate_route
+from scoring import priorities
+from preferences import (
+    InputFormatError,
+    canonical_city,
+    decode_input,
+    duration,
+    local_parse,
+    questions,
+)
 from providers import PROVIDER_ERRORS, model_parse
 
 
@@ -48,7 +57,7 @@ async def parse_preferences(client, value):
     return preferences, method
 
 
-def terminal(kind, message, preferences=None):
+def result_event(kind, message, preferences=None):
     """Carry parsed fields into the form when an outing needs clarification or changes."""
     return {
         "type": kind,
@@ -68,10 +77,10 @@ async def run_plan(value):
         except ValidationError as error:
             detail = error.errors()[0]
             field = ".".join(map(str, detail["loc"]))
-            yield terminal("clarify", f"Please check {field}: {detail['msg']}.")
+            yield result_event("clarify", f"Please check {field}: {detail['msg']}.")
             return
-        except (ValueError, TypeError):
-            yield terminal(
+        except InputFormatError:
+            yield result_event(
                 "clarify", "Please use valid JSON or describe your Saturday in plain text."
             )
             return
@@ -90,11 +99,11 @@ async def run_plan(value):
 
         missing = questions(prefs, value)
         if missing:
-            yield terminal("clarify", " ".join(missing[:2]), prefs)
+            yield result_event("clarify", " ".join(missing[:2]), prefs)
             return
         limits = interpret_constraints(prefs)
         if limits.unsupported:
-            yield terminal(
+            yield result_event(
                 "empty",
                 "The venue records cannot verify "
                 + ", ".join(limits.unsupported)
@@ -102,51 +111,51 @@ async def run_plan(value):
                 prefs,
             )
             return
-        tags = prefs.interests or ["walks", "food", "art"]
-        tags = [tag for tag in tags if tag not in limits.excluded]
-        focused = bool(prefs.interests) and len(tags) == 1 and tags[0] in EXAMPLES
-        if focused:
-            limits.required.add(tags[0])
-        search = await find_places(client, prefs, tags, limits, focused=focused)
+        brief = Brief.create(prefs, limits)
+        search = await find_places(client, prefs, brief.interests, limits, focused=brief.focused)
         yield event(
             "find_places",
-            {"city": prefs.city, "interests": tags, "constraints": prefs.constraints},
+            {"city": prefs.city, "interests": brief.interests, "constraints": prefs.constraints},
             {"found": search.total_found, "eligible": len(search.places), "source": search.source},
-            f"{search.source}: {len(search.places)} of {search.total_found} places passed the filters.",
+            f"{search.source}: {len(search.places)} of {search.total_found} places qualified.",
         )
         if prefs.starting_area and not search.origin:
-            yield terminal(
+            yield result_event(
                 "clarify",
-                "I couldn’t locate that starting point. Enter a named venue or leave it blank to start at your first stop.",
+                "I couldn't locate that starting point. Enter a named venue or leave it blank to "
+                "start at your first stop.",
                 prefs,
             )
             return
         if not search.places:
-            yield terminal("empty", no_places_message(search, prefs, tags, limits), prefs)
+            yield result_event(
+                "empty", no_places_message(search, prefs, brief.interests, limits), prefs
+            )
             return
-        if limits.food_uncertain:
-            limits.required.discard("meal")
-        brief = Brief.create(prefs, limits, tags, search.origin)
+        brief.origin = search.origin
         async for update in select_itinerary(client, brief, search.places, search.source):
             yield update
 
 
 async def select_itinerary(client, brief, places, source):
     """Try feasible candidates in score order until one passes final transfer validation."""
-    if brief.tired:
-        places = [
-            {**place, "minutes": place.get("short_minutes", place["minutes"])} for place in places
-        ]
-    candidates, cache, rejections, closest = build_candidates(places, brief)
+    search = build_candidates(places, brief)
     yield event(
         "build_candidates",
         {"venues": len(places), "minutes": brief.minutes, "budget": brief.preferences.budget},
-        {"feasible_previews": len(candidates), "rejected": dict(rejections)},
-        f"Ranked {len(candidates)} feasible provisional itineraries.",
+        {
+            "feasible_previews": len(search.ranked),
+            "rejected": dict(search.rejections),
+            "top_routes": [
+                {"stops": [stop["name"] for stop in stops], "score": round(score, 3)}
+                for score, stops in search.ranked[:2]
+            ],
+        },
+        f"Ranked {len(search.ranked)} feasible provisional itineraries.",
     )
     lookups = {}
-    for _, stops in candidates:
-        legs = await estimate_route(client, stops, brief, cache, lookups)
+    for rank_score, stops in search.ranked:
+        legs = await estimate_route(client, stops, brief, search.leg_cache, lookups)
         names = [place["name"] for place in stops]
         yield event(
             "estimate_route",
@@ -163,14 +172,20 @@ async def select_itinerary(client, brief, places, source):
                 {"passed": False, "reason": reason, "gap": gap},
                 "Rechecked route failed on " + reason + ".",
             )
-            record_closest_failure(closest, reason, gap, names[-1])
+            record_closest_failure(search.closest, reason, gap, names[-1])
             continue
         yield event(
             "validate_plan",
             {"stops": names, "time_limit": brief.minutes, "budget_limit": brief.preferences.budget},
-            {"passed": True, "minutes": plan["total"], "upper_inr": plan["high"]},
+            {
+                "passed": True,
+                "minutes": plan["total"],
+                "upper_inr": plan["high"],
+                "provisional_rank_score": round(rank_score, 3),
+                "validated_score": priorities(plan, brief).trace(),
+            },
             f"Verified {plan['total']} minutes and up to ₹{plan['high']:,}, including transfers.",
         )
-        yield finish_plan(plan, brief, places, cache, source, candidates)
+        yield finish_plan(plan, brief, places, search.leg_cache, source, search.ranked)
         return
-    yield terminal("empty", explain_failure(closest, brief, places), brief.preferences)
+    yield result_event("empty", explain_failure(search.closest, brief, places), brief.preferences)

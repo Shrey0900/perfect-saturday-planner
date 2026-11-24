@@ -6,9 +6,10 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from constraints import NON_VEG, diet_labels, extract_constraints, normalize_diet_spelling
 from interests import interest_topics
 
-WORDS = {
+NUMBER_WORDS = {
     "one": "1",
     "two": "2",
     "three": "3",
@@ -36,10 +37,6 @@ CITIES = {
 Short = Annotated[str, Field(max_length=180)]
 
 
-def normalize_diet_spelling(text):
-    return re.sub(r"\bveg(?:itatrian|itarian|eterian)\b", "vegetarian", text, flags=re.IGNORECASE)
-
-
 class Preferences(BaseModel):
     """Validated visitor input shared by the JSON form, free-text parser and optional LLM."""
 
@@ -58,10 +55,9 @@ class Preferences(BaseModel):
     def read_diet_from_interests(self):
         # The editable form can put "vegetarian food" in the interests field.
         for interest in self.interests:
-            label = re.sub(NON_VEG, "", normalize_diet_spelling(interest).lower())
-            diet = re.search(r"\b(pure[ -]veg(?:etarian)?|veg(?:etarian)?|vegan)\b", label)
-            if diet and diet[0] not in self.constraints:
-                self.constraints.append(diet[0])
+            for diet in diet_labels(interest):
+                if diet not in self.constraints:
+                    self.constraints.append(diet)
         return self
 
     @model_validator(mode="before")
@@ -110,7 +106,7 @@ class Preferences(BaseModel):
 
 
 def normalize_numbers(text):
-    for phrase, number in WORDS.items():
+    for phrase, number in NUMBER_WORDS.items():
         text = re.sub(r"\b" + phrase + r"\b", number, text, flags=re.IGNORECASE)
     return text.lower()
 
@@ -142,17 +138,14 @@ def canonical_city(city):
 def extract_clock(text):
     match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", text, re.IGNORECASE)
     if match and 1 <= int(match[1]) <= 12 and int(match[2] or 0) < 60:
-        return f"{(int(match[1]) % 12 + (12 if match[3].lower() == 'pm' else 0)):02}:{int(match[2] or 0):02}"
+        hour = int(match[1]) % 12 + (12 if match[3].lower() == "pm" else 0)
+        return f"{hour:02}:{int(match[2] or 0):02}"
     match = re.search(
         r"\b(?:at|start(?:ing)?(?: at)?)\s+([01]?\d|2[0-3]):([0-5]\d)\b", text, re.IGNORECASE
     )
     if match:
         return f"{int(match[1]):02}:{match[2]}"
     return "17:00" if re.search(r"\bevening\b|\bshaam\b", text, re.IGNORECASE) else "10:00"
-
-
-NON_VEG = r"\b(?:non[ -]?(?:veg(?:etarian)?)(?:s)?|not (?:a )?vegetarian)\b"
-DIETARY_UNKNOWN = r"allerg|gluten|nut[ -]?free|halal|kosher|lactose|jain"
 
 
 def amount(match):
@@ -189,29 +182,6 @@ def extract_budget(text):
     return None
 
 
-CONSTRAINT_RULES = [
-    (r"pure[\s-]*veg|veg(?:etarian)?[\s-]*only", "pure vegetarian"),
-    (r"\bvegan\b", "vegan"),
-    (r"\b(?:vegetarian|veg)\b", "vegetarian"),
-    (
-        r"(?:avoid|hate|no|away from|skip) crowds?|\b(?:uncrowded|crowded places|quiet places)\b",
-        "avoid crowds",
-    ),
-    (r"(?:indoors? only|stay indoors|no outdoors?)", "indoors only"),
-    (r"(?:outdoors? only|no indoors?)", "outdoors only"),
-    (r"wheelchair|step[\s-]*free", "wheelchair access"),
-    (r"(?:no walking|can't walk|cannot walk)", "no walking"),
-    (
-        r"(?:must|need|want|have to)(?: to)? (?:have|get|eat|include|grab)?\s*(?:a |some )?(?:meal|lunch|dinner|breakfast|food)\b",
-        "meal required",
-    ),
-    (
-        r"(?:live (?:music|show|gig) (?:is a must|only|required)|must (?:have|include) live music)",
-        "live performance required",
-    ),
-]
-
-
 def extract_city(normalized):
     return next(
         (
@@ -221,34 +191,6 @@ def extract_city(normalized):
         ),
         "",
     )
-
-
-def extract_constraints(normalized):
-    """Collect diet, mobility and mandatory requirements before finding places."""
-    constraints = []
-    diet_text = re.sub(NON_VEG, "", normalized)
-    if re.search(r"\b(?:must|only|require)\b.{0,14}non[ -]?veg|non[ -]?veg only", normalized):
-        constraints.append("meat required")
-    if re.search(r"\b(?:walk(?:ing)? only|no (?:cabs?|autos?|taxis?))\b", normalized):
-        constraints.append("walking only")
-    if re.search(r"\b(?:skip|no|without) (?:lunch|meals?|food)\b", normalized):
-        constraints.append("skip meals")
-    for pattern, label in CONSTRAINT_RULES:
-        if re.search(
-            pattern,
-            diet_text if label in ("vegetarian", "pure vegetarian", "vegan") else normalized,
-        ):
-            constraints.append(label)
-    for requirement in re.split(r"[,.;!?]|\b(?:and|but)\b", normalized):
-        requirement = requirement.strip()
-        if re.search(
-            r"allerg|gluten|nut.free|halal|kosher|lactose|jain|pet.friendly|dog.friendly|stroller",
-            requirement,
-        ):
-            constraints.append(requirement[:160])
-        if re.search(r"only quiet|must (?:be |avoid )?(?:quiet|crowds?)", requirement):
-            constraints.append("strictly avoid crowds")
-    return constraints
 
 
 def extract_interests(normalized):
@@ -285,7 +227,8 @@ def extract_interests(normalized):
 def group_size(normalized):
     """Read an explicit party size or recognise wording for a couple."""
     group = re.search(
-        r"\b(?:for|group of|party of)\s+(\d+)\s*(?:people|persons|adults|of us|friends)?\b(?!\s*(?:min|hour|hr))",
+        r"\b(?:for|group of|party of)\s+(\d+)\s*(?:people|persons|adults|of us|friends)?\b"
+        r"(?!\s*(?:min|hour|hr))",
         normalized,
     )
     return (
@@ -305,7 +248,8 @@ def local_parse(text):
     if people > 1 and budget is not None and re.search(r"per (?:person|head)|each\b", normalized):
         budget *= people
     area = re.search(
-        r"\b(?:starting (?:from|near|in)|start from|near)\s+([a-z][\w -]{1,48}?)(?=\s+(?:at|with|for|and|on|budget|under)\b|[,.;!?]|$)",
+        r"\b(?:starting (?:from|near|in)|start from|near)\s+([a-z][\w -]{1,48}?)"
+        r"(?=\s+(?:at|with|for|and|on|budget|under)\b|[,.;!?]|$)",
         normalized,
     )
     return Preferences(
@@ -321,14 +265,21 @@ def local_parse(text):
     )
 
 
+class InputFormatError(ValueError):
+    """The submitted brief cannot be read as JSON or supported plain text."""
+
+
 def decode_input(value):
     """Validate a JSON object or pasted JSON; return None for ordinary free text."""
     if isinstance(value, str) and value.lstrip().startswith(("{", "[")):
-        value = json.loads(value)
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as error:
+            raise InputFormatError("Invalid JSON brief") from error
     if isinstance(value, dict):
         return Preferences.model_validate(value)
     if not isinstance(value, str) or len(value) > 3500:
-        raise ValueError(
+        raise InputFormatError(
             "Describe the outing in up to 3,500 characters or paste the assignment JSON."
         )
     return None

@@ -3,21 +3,38 @@
 import re
 from collections import Counter
 from dataclasses import dataclass
-from math import ceil
+from enum import StrEnum
+from typing import NamedTuple
 
-from constraints import Limits
+from constraints import Flag, Limits
+from interests import KNOWN_TOPICS
 from preferences import Preferences, duration
-from providers import km
+from routing import route_legs
+from scoring import LONG_WINDOW_MINUTES, evidence, priorities
 
 BEAM_WIDTH = 64
+TRANSFER_BUFFER = 5
+FIRST_STOP_WAIT_LIMIT = 60
+LATER_STOP_WAIT_LIMIT = 30
+DAYTIME_HOURS = (10 * 60, 18 * 60)
+LUNCH_WINDOW = (12 * 60, 14 * 60 + 30)
+MIN_OUTING_FOR_LUNCH = 180
+MIN_LUNCH_OVERLAP = 45
+MEDIUM_WINDOW_MINUTES = 150
+DEFAULT_INTERESTS = ("walks", "food", "art")
+
+
+class Failure(StrEnum):
+    WALKING = "walking restriction"
+    OPENS_LATER = "opens later"
+    CLOSING = "closing time"
+    BUDGET = "budget"
+    TIME = "time"
+    REQUIRED = "required activity"
 
 
 def clock(minutes):
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
-
-
-def position(place):
-    return place["lat"], place["lon"]
 
 
 @dataclass
@@ -32,17 +49,24 @@ class Brief:
     minutes: int
     tired: bool
     lunch: bool
+    focused: bool
 
     @classmethod
-    def create(cls, preferences, limits, interests, origin):
+    def create(cls, preferences, limits, interests=None, origin=None):
+        """Derive the active interests, pace and lunch policy once for all planning tools."""
+        requested = preferences.interests if interests is None else interests
+        interests = [tag for tag in (requested or DEFAULT_INTERESTS) if tag not in limits.excluded]
+        focused = bool(requested) and len(interests) == 1 and interests[0] in KNOWN_TOPICS
+        if focused:
+            limits.required.add(interests[0])
         hours, minutes = map(int, preferences.start_time.split(":"))
         start = 60 * hours + minutes
         duration_minutes = duration(preferences.available_time)
-        lunch_overlap = min(start + duration_minutes, 14 * 60 + 30) - max(start, 12 * 60)
+        lunch_overlap = min(start + duration_minutes, LUNCH_WINDOW[1]) - max(start, LUNCH_WINDOW[0])
         lunch = (
-            duration_minutes >= 180
-            and lunch_overlap >= 45
-            and "skip_meals" not in limits.flags
+            duration_minutes >= MIN_OUTING_FOR_LUNCH
+            and lunch_overlap >= MIN_LUNCH_OVERLAP
+            and Flag.SKIP_MEALS not in limits.flags
             and "food" not in limits.excluded
             and not limits.food_uncertain
             and (len(interests) != 1 or "food" in interests or "meal" in limits.required)
@@ -52,63 +76,46 @@ class Brief:
                 "tired|low.energy|relax|gentle|slow|exhaust|thak", preferences.mood, re.IGNORECASE
             )
         )
-        return cls(preferences, limits, interests, origin, start, duration_minutes, tired, lunch)
-
-
-def estimate_leg(start, end, brief):
-    """Model one transfer, including group auto fares when the walk is too long."""
-    distance = 0 if start is None else km(start, end) * 1.4
-    walk = ceil(distance / 4.2 * 60) + 2 if distance else 0
-    leg = {
-        "mode": "walk",
-        "minutes": walk,
-        "low": 0,
-        "high": 0,
-        "distance": round(distance, 1),
-        "source": "local distance estimate",
-    }
-    # Preserve a free walk for short, low-budget routes. Long transfers may
-    # still use an auto, and the schedule will check its complete cost.
-    reserve_cash = (
-        brief.preferences.budget < 350 and walk <= 40 and "no_walk" not in brief.limits.flags
-    )
-    if (
-        not reserve_cash
-        and walk
-        and (walk > (20 if brief.tired else 32) or "no_walk" in brief.limits.flags)
-        and "walk_only" not in brief.limits.flags
-    ):
-        vehicles = ceil(brief.preferences.people / 3)
-        leg.update(
-            mode="auto",
-            walk_alternative=walk,
-            minutes=ceil(distance / 16 * 60) + 7,
-            low=vehicles * (35 + ceil(13 * distance)),
-            high=vehicles * (65 + ceil(23 * distance)),
-            source="modelled auto fare and time",
+        return cls(
+            preferences, limits, interests, origin, start, duration_minutes, tired, lunch, focused
         )
-    return leg
 
 
-def route_legs(stops, brief, cache):
-    """Reuse per-request transfer estimates for routes that share a pair of coordinates."""
-    legs = []
-    previous = brief.origin
-    for place in stops:
-        end = position(place)
-        pair = (previous, end)
-        if pair not in cache:
-            cache[pair] = estimate_leg(previous, end, brief)
-        legs.append(cache[pair])
-        previous = end
-    return legs
+def visit_length(place, brief, start, closing):
+    """Use the gentle pace when available and trim only visits with a documented minimum."""
+    preferred = place.get("short_minutes", place["minutes"]) if brief.tired else place["minutes"]
+    if "min_minutes" not in place:
+        return preferred
+    remaining = min(closing, brief.start + brief.minutes) - start
+    return max(place["min_minutes"], min(preferred, remaining))
+
+
+class VisitTiming(NamedTuple):
+    start: int
+    wait: int
+    visit: int
+    end: int
+
+
+def check_opening(place, brief, arrival, *, first):
+    """Resolve the opening wait and visit duration before charging for this stop."""
+    opening, closing = place.get("hours") or DAYTIME_HOURS
+    wait = max(0, opening - arrival)
+    if wait > (FIRST_STOP_WAIT_LIMIT if first else LATER_STOP_WAIT_LIMIT):
+        return None, (Failure.OPENS_LATER, wait)
+    start = arrival + wait
+    visit = visit_length(place, brief, start, closing)
+    end = start + visit
+    if end > closing:
+        return None, (Failure.CLOSING, end - closing)
+    return VisitTiming(start, wait, visit, end), None
 
 
 def schedule(stops, legs, brief):
     """Build a timeline or return the first feasibility failure and its numeric gap.
 
     Count travel, buffers, opening waits and visits against the time window.
-    Budget checks use each venue’s upper price per person plus transport for the group.
+    Budget checks use each venue's upper price per person plus transport for the group.
     Candidate ranking and final validation both call this function.
     """
     cursor = brief.start
@@ -116,30 +123,23 @@ def schedule(stops, legs, brief):
     timeline = []
     for place, leg in zip(stops, legs):
         travel = leg["minutes"]
-        buffer = 5 if travel else 0
-        if "no_walk" in brief.limits.flags and leg["mode"] == "walk" and travel:
-            return None, ("walking restriction", travel)
-        cursor += travel + buffer
-        opening, closing = place.get("hours") or (600, 1080)
-        wait = max(0, opening - cursor)
-        if wait > (60 if not timeline else 30):
-            return None, ("opens later", wait)
-        cursor += wait
-        visit = place["minutes"]
-        if "min_minutes" in place:
-            remaining = min(closing, brief.start + brief.minutes) - cursor
-            visit = max(place["min_minutes"], min(visit, remaining))
-        end = cursor + visit
-        if end > closing:
-            return None, ("closing time", end - closing)
+        buffer = TRANSFER_BUFFER if travel else 0
+        if Flag.NO_WALK in brief.limits.flags and leg["mode"] == "walk" and travel:
+            return None, (Failure.WALKING, travel)
+        arrival = cursor + travel + buffer
+        timing, failure = check_opening(place, brief, arrival, first=not timeline)
+        if failure:
+            return None, failure
+        cursor, wait, visit, end = timing
         low += place["low"] * brief.preferences.people + leg["low"]
         high += place["high"] * brief.preferences.people + leg["high"]
         if high > brief.preferences.budget:
-            return None, ("budget", high - brief.preferences.budget)
+            return None, (Failure.BUDGET, high - brief.preferences.budget)
         if end - brief.start > brief.minutes:
+            # If removing the wait alone would make the visit fit, suggest a later start.
             if wait and end - wait - brief.start <= brief.minutes:
-                return None, ("opens later", wait)
-            return None, ("time", end - brief.start - brief.minutes)
+                return None, (Failure.OPENS_LATER, wait)
+            return None, (Failure.TIME, end - brief.start - brief.minutes)
         timeline.append(
             {
                 "place": place if visit == place["minutes"] else {**place, "minutes": visit},
@@ -166,56 +166,6 @@ def schedule(stops, legs, brief):
     return plan, None
 
 
-def evidence(place, topic):
-    """Return a primary, incidental or absent match for a venue and interest."""
-    if topic in place.get("primary_tags", place["tags"]):
-        return 1.0
-    if topic in place["tags"]:
-        return 0.28
-    return 0.0
-
-
-def is_lunch_time(start_minute):
-    return 11 * 60 + 45 <= start_minute <= 14 * 60
-
-
-def includes_lunch(plan):
-    return any(
-        s["place"].get("food_role") == "meal" and is_lunch_time(s["start_minute"])
-        for s in plan["stops"]
-    )
-
-
-def priorities(plan, brief):
-    """Score a feasible route on interest coverage, visit time, lunch, crowds, travel and cost."""
-    places = [stop["place"] for stop in plan["stops"]]
-    matches = [max(evidence(place, tag) for place in places) for tag in brief.interests]
-    # A primary match should beat filling the same time with incidental stops.
-    goal = sum(matches) * 25 + 65 * matches.count(1.0)
-    for place in places:
-        relevance = max((evidence(place, tag) for tag in brief.interests), default=0)
-        goal += 4 * relevance
-        if not relevance and brief.minutes < 300 and place.get("food_role") != "meal":
-            goal -= 18
-    visit_minutes = sum(place["minutes"] for place in places)
-    target_visit_minutes = brief.minutes * (0.68 if brief.tired else 0.82)
-    goal += 26 * min(visit_minutes / target_visit_minutes, 1)
-    if brief.minutes >= 300:
-        goal += 0.35 * min(visit_minutes, 0.65 * brief.minutes)
-    goal += len({place["kind"] for place in places}) * 2
-    if brief.lunch and includes_lunch(plan):
-        goal += 75
-    if "crowds" in brief.limits.flags:
-        goal -= sum(
-            {"low": 0, "medium": 2, "high": 12}.get(place.get("crowd"), 5) for place in places
-        )
-    travel = sum(stop["leg"]["minutes"] for stop in plan["stops"])
-    goal -= 0.10 * travel + (0.11 if brief.tired else 0.04) * plan["walk"]
-    goal -= 0.30 * sum(stop["wait"] for stop in plan["stops"])
-    goal -= plan["high"] / max(1, brief.preferences.budget) * 2
-    return goal
-
-
 def meets_required(plan, brief):
     """Check that the candidate includes every mandatory activity or full meal."""
     places = [s["place"] for s in plan["stops"]]
@@ -234,58 +184,77 @@ def record_closest_failure(closest, reason, gap, venue_name):
         closest[reason] = (gap, venue_name)
 
 
-def build_candidates(places, brief):
-    """Build routes one stop at a time and rank the feasible ones.
+class CandidateSearch(NamedTuple):
+    ranked: list
+    leg_cache: dict
+    rejections: Counter
+    closest: dict
 
-    Keep the best 64 distinct partial routes at each depth. Record the smallest
-    time or cost gap for each rejection reason so a failed search can explain why."""
-    # Beam search preserves distinct endings, so a modestly ranked stop can lead
-    # into a strong lunch or music itinerary. Keep work bounded for live results.
+
+def next_stops(route, places):
+    """Never repeat a venue or schedule two full meals in the same outing."""
+    has_meal = any(place["food_role"] == "meal" for place in route)
+    return (
+        place
+        for place in places
+        if place not in route and not (has_meal and place["food_role"] == "meal")
+    )
+
+
+def best_frontier(expanded):
+    """Keep the best distinct visit sets and endpoints for the next search depth."""
+    frontier = []
+    seen = set()
+    for _, route in sorted(expanded, key=lambda item: -item[0]):
+        key = (frozenset(place["id"] for place in route), route[-1]["id"])
+        if key not in seen:
+            seen.add(key)
+            frontier.append(route)
+        if len(frontier) >= BEAM_WIDTH:
+            break
+    return frontier
+
+
+def extend_route(route, places, brief, search):
+    """Score feasible extensions and record why a rejected extension failed."""
+    for place in next_stops(route, places):
+        stops = route + (place,)
+        legs = route_legs(stops, brief, search.leg_cache)
+        proposed, failure = schedule(stops, legs, brief)
+        if failure:
+            reason, gap = failure
+            search.rejections[reason] += 1
+            record_closest_failure(search.closest, reason, gap, place["name"])
+            continue
+        entry = (priorities(proposed, brief).total, stops)
+        if meets_required(proposed, brief):
+            search.ranked.append(entry)
+        yield entry
+
+
+def build_candidates(places, brief):
+    """Search up to three, four or five stops, keeping at most BEAM_WIDTH routes per depth."""
+    search = CandidateSearch([], {}, Counter(), {})
     frontier = [()]
-    options = []
-    cache = {}
-    rejections = Counter()
-    closest = {}
-    max_stops = 5 if brief.minutes >= 300 else 4 if brief.minutes >= 150 else 3
+    max_stops = 3
+    if brief.minutes >= LONG_WINDOW_MINUTES:
+        max_stops = 5
+    elif brief.minutes >= MEDIUM_WINDOW_MINUTES:
+        max_stops = 4
     for _ in range(max_stops):
-        expanded = []
-        for route in frontier:
-            for place in places:
-                if place in route:
-                    continue
-                if place["food_role"] == "meal" and any(p["food_role"] == "meal" for p in route):
-                    continue
-                stops = route + (place,)
-                legs = route_legs(stops, brief, cache)
-                proposed, failure = schedule(stops, legs, brief)
-                if failure:
-                    reason, amount = failure
-                    rejections[reason] += 1
-                    record_closest_failure(closest, reason, amount, place["name"])
-                    continue
-                score = priorities(proposed, brief)
-                expanded.append((score, stops))
-                if meets_required(proposed, brief):
-                    options.append((score, stops))
-        expanded.sort(key=lambda item: -item[0])
-        frontier = []
-        seen = set()
-        for _, route in expanded:
-            key = (frozenset(p["id"] for p in route), route[-1]["id"])
-            if key not in seen:
-                seen.add(key)
-                frontier.append(route)
-            if len(frontier) >= BEAM_WIDTH:
-                break
+        expanded = (
+            entry for route in frontier for entry in extend_route(route, places, brief, search)
+        )
+        frontier = best_frontier(expanded)
         if not frontier:
             break
-    options.sort(key=lambda item: -item[0])
-    return options, cache, rejections, closest
+    search.ranked.sort(key=lambda item: -item[0])
+    return search
 
 
 def validate_plan(stops, legs, brief):
     """Rebuild the schedule using the final legs and recheck the mandatory activities."""
     plan, failure = schedule(stops, legs, brief)
     if plan and not meets_required(plan, brief):
-        return None, ("required activity", 1)
+        return None, (Failure.REQUIRED, 1)
     return plan, failure

@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from planner import run_plan
+from providers import live_data_enabled
 
 app = FastAPI(title="Perfect Saturday Planner")
 STATIC = Path(__file__).parent / "static"
@@ -35,7 +36,7 @@ def health(request: Request, details: bool = False):
     return {
         "status": "ok",
         "openai_configured": bool(os.getenv("OPENAI_API_KEY", "").strip()),
-        "geoapify_configured": bool(os.getenv("GEOAPIFY_API_KEY", "").strip()),
+        "geoapify_configured": live_data_enabled(),
         "rate_limit_identity": source,
     }
 
@@ -63,7 +64,7 @@ def visitor_key(request):
 
 
 def rate_limited(key):
-    """Apply a rolling one-minute allowance in this worker and evict the least recently used visitor bucket at capacity."""
+    """Apply a rolling per-visitor limit and evict the oldest bucket at capacity."""
     now = time.monotonic()
     history = recent.setdefault(key, deque())
     recent.move_to_end(key)
@@ -103,6 +104,7 @@ async def plan(request: Request):
             async for event in run_plan(value):
                 yield json.dumps(event, ensure_ascii=False) + "\n"
         except Exception:
+            logging.getLogger("uvicorn.error").exception("Unexpected failure while planning")
             yield (
                 json.dumps(
                     {
