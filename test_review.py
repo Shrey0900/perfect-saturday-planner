@@ -5,11 +5,13 @@ from unittest.mock import patch
 
 from starlette.requests import Request
 
-from itinerary import Brief, interpret_constraints, priorities, schedule
+from constraints import interpret_constraints
+from interests import classify
+from itinerary import Brief, priorities, schedule
 from main import visitor_key
-from planner import BANGALORE_EXAMPLE, run_plan
-from preferences import Preferences, classify, duration, local_parse
-from test_planner import SAMPLE
+from planner import run_plan
+from preferences import Preferences, duration, local_parse
+from test_planner import BANGALORE_EXAMPLE, SAMPLE
 
 
 async def resolve(value):

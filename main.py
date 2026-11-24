@@ -28,6 +28,7 @@ def index():
 
 @app.get("/health")
 def health(request: Request, details: bool = False):
+    """Report service health and, on request, integration availability without exposing keys."""
     if not details:
         return {"status": "ok"}
     _, source = visitor_identity(request)
@@ -62,6 +63,7 @@ def visitor_key(request):
 
 
 def rate_limited(key):
+    """Apply a rolling one-minute allowance in this worker and evict the least recently used visitor bucket at capacity."""
     now = time.monotonic()
     history = recent.setdefault(key, deque())
     recent.move_to_end(key)
@@ -77,6 +79,7 @@ def rate_limited(key):
 
 @app.post("/api/plan")
 async def plan(request: Request):
+    """Read a size-limited request and stream one newline-delimited JSON event per planning step."""
     raw = bytearray()
     async for chunk in request.stream():
         raw.extend(chunk)

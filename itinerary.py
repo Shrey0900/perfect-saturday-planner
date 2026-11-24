@@ -2,11 +2,14 @@
 
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from math import ceil
 
-from preferences import DIETARY_UNKNOWN, NON_VEG, classify, duration, normalize_diet_spelling
+from constraints import Limits
+from preferences import Preferences, duration
 from providers import km
+
+BEAM_WIDTH = 64
 
 
 def clock(minutes):
@@ -18,96 +21,13 @@ def position(place):
 
 
 @dataclass
-class Limits:
-    diet: str = ""
-    excluded: set = field(default_factory=set)
-    required: set = field(default_factory=set)
-    flags: set = field(default_factory=set)
-    food_uncertain: list = field(default_factory=list)
-    unsupported: list = field(default_factory=list)
-
-
-def interpret_constraints(preferences):
-    limits = Limits()
-    for raw in preferences.constraints:
-        item = normalize_diet_spelling(raw.lower().strip())
-        if not item or item in {"none", "no restrictions", "no constraints"}:
-            continue
-        if re.search(DIETARY_UNKNOWN, item):
-            limits.food_uncertain.append(raw)
-            continue
-        if re.search(NON_VEG, item) or item == "meat required":
-            if re.search(r"\bonly\b|\bmust\b|\brequired?\b", item):
-                limits.food_uncertain.append("a confirmed non-vegetarian meal")
-            item = re.sub(NON_VEG, "", item)
-            if not re.search(r"\bveg(?:etarian)?\b", item):
-                continue
-        if "vegan" in item:
-            limits.diet = "vegan"
-        elif re.search(r"pure[ -]?veg|veg(?:etarian)?[ -]?only|only vegetarian", item):
-            if limits.diet != "vegan":
-                limits.diet = "only"
-        elif re.search(r"\bveg(?:etarian)?\b", item):
-            if not limits.diet:
-                limits.diet = "options"
-        elif re.search("wheelchair|step.free|accessible entrance|no stairs", item):
-            limits.flags.add("accessible")
-        elif re.search("no walking|cannot walk|can't walk|no walks", item):
-            limits.flags.add("no_walk")
-        elif re.search("walking only|walk only|no (cabs?|autos?|taxis?)", item):
-            limits.flags.add("walk_only")
-        elif re.search("crowd|quiet|peaceful", item):
-            limits.flags.add("crowds")
-            if re.search("must|only|guarantee|strictly", item):
-                limits.unsupported.append("confirmed quiet conditions")
-        elif re.search("live (music|performance|show|gig)", item):
-            limits.unsupported.append("a confirmed performance this Saturday")
-        elif "skip meals" in item or re.search("no (lunch|meals?|food)", item):
-            limits.flags.add("skip_meals")
-        elif re.search("indoors?|avoid (?:the )?(?:heat|sun|outdoors?)", item):
-            limits.flags.add("indoors")
-        elif "outdoor" in item:
-            limits.flags.add("outdoors")
-        elif re.search(r"\b(no|avoid|skip|dislike)\b", item) and classify(item):
-            limits.excluded.add(classify(item))
-        elif re.search(
-            r"meal required|\b(must|need|include|mandatory|required)\b", item
-        ) and classify(item):
-            target = classify(item)
-            limits.required.add("meal" if target == "food" else target)
-        else:
-            limits.unsupported.append(raw)
-    return limits
-
-
-def suitable(place, limits):
-    tags = set(place["tags"])
-    if limits.excluded.intersection(tags):
-        return False
-    if "accessible" in limits.flags and not (
-        place.get("accessible") or place.get("wheelchair") is True
-    ):
-        return False
-    if "indoors" in limits.flags and ("outdoors" in tags or place["kind"] == "park"):
-        return False
-    if "outdoors" in limits.flags and "outdoors" not in tags and place["kind"] != "park":
-        return False
-    if "no_walk" in limits.flags and ("walks" in tags or place["kind"] == "park"):
-        return False
-    if place["kind"] == "restaurant":
-        if limits.food_uncertain or "skip_meals" in limits.flags:
-            return False
-        allowed = {"vegan": {"vegan"}, "only": {"only"}, "options": {"only", "options", "vegan"}}
-        return not limits.diet or place["veg"] in allowed[limits.diet]
-    return True
-
-
-@dataclass
 class Brief:
-    preferences: object
+    """Planning inputs with a starting minute, time limit and derived pace and lunch preferences."""
+
+    preferences: Preferences
     limits: Limits
-    interests: list
-    origin: tuple | None
+    interests: list[str]
+    origin: tuple[float, float] | None
     start: int
     minutes: int
     tired: bool
@@ -136,6 +56,7 @@ class Brief:
 
 
 def estimate_leg(start, end, brief):
+    """Model one transfer, including group auto fares when the walk is too long."""
     distance = 0 if start is None else km(start, end) * 1.4
     walk = ceil(distance / 4.2 * 60) + 2 if distance else 0
     leg = {
@@ -170,6 +91,7 @@ def estimate_leg(start, end, brief):
 
 
 def route_legs(stops, brief, cache):
+    """Reuse per-request transfer estimates for routes that share a pair of coordinates."""
     legs = []
     previous = brief.origin
     for place in stops:
@@ -183,7 +105,12 @@ def route_legs(stops, brief, cache):
 
 
 def schedule(stops, legs, brief):
-    """Provisional and final schedules use identical arithmetic."""
+    """Build a timeline or return the first feasibility failure and its numeric gap.
+
+    Count travel, buffers, opening waits and visits against the time window.
+    Budget checks use each venue’s upper price per person plus transport for the group.
+    Candidate ranking and final validation both call this function.
+    """
     cursor = brief.start
     low = high = 0
     timeline = []
@@ -240,6 +167,7 @@ def schedule(stops, legs, brief):
 
 
 def evidence(place, topic):
+    """Return a primary, incidental or absent match for a venue and interest."""
     if topic in place.get("primary_tags", place["tags"]):
         return 1.0
     if topic in place["tags"]:
@@ -247,14 +175,19 @@ def evidence(place, topic):
     return 0.0
 
 
+def is_lunch_time(start_minute):
+    return 11 * 60 + 45 <= start_minute <= 14 * 60
+
+
 def includes_lunch(plan):
     return any(
-        s["place"].get("food_role") == "meal" and 705 <= s["start_minute"] <= 840
+        s["place"].get("food_role") == "meal" and is_lunch_time(s["start_minute"])
         for s in plan["stops"]
     )
 
 
 def priorities(plan, brief):
+    """Score a feasible route on interest coverage, visit time, lunch, crowds, travel and cost."""
     places = [stop["place"] for stop in plan["stops"]]
     matches = [max(evidence(place, tag) for place in places) for tag in brief.interests]
     # A primary match should beat filling the same time with incidental stops.
@@ -265,7 +198,8 @@ def priorities(plan, brief):
         if not relevance and brief.minutes < 300 and place.get("food_role") != "meal":
             goal -= 18
     visit_minutes = sum(place["minutes"] for place in places)
-    goal += 26 * min(visit_minutes / (brief.minutes * (0.68 if brief.tired else 0.82)), 1)
+    target_visit_minutes = brief.minutes * (0.68 if brief.tired else 0.82)
+    goal += 26 * min(visit_minutes / target_visit_minutes, 1)
     if brief.minutes >= 300:
         goal += 0.35 * min(visit_minutes, 0.65 * brief.minutes)
     goal += len({place["kind"] for place in places}) * 2
@@ -283,6 +217,7 @@ def priorities(plan, brief):
 
 
 def meets_required(plan, brief):
+    """Check that the candidate includes every mandatory activity or full meal."""
     places = [s["place"] for s in plan["stops"]]
     for requested in brief.limits.required:
         if requested == "meal":
@@ -293,7 +228,17 @@ def meets_required(plan, brief):
     return True
 
 
+def record_closest_failure(closest, reason, gap, venue_name):
+    """Keep the smallest gap for this reason across search and final validation."""
+    if reason not in closest or gap < closest[reason][0]:
+        closest[reason] = (gap, venue_name)
+
+
 def build_candidates(places, brief):
+    """Build routes one stop at a time and rank the feasible ones.
+
+    Keep the best 64 distinct partial routes at each depth. Record the smallest
+    time or cost gap for each rejection reason so a failed search can explain why."""
     # Beam search preserves distinct endings, so a modestly ranked stop can lead
     # into a strong lunch or music itinerary. Keep work bounded for live results.
     frontier = [()]
@@ -302,7 +247,7 @@ def build_candidates(places, brief):
     rejections = Counter()
     closest = {}
     max_stops = 5 if brief.minutes >= 300 else 4 if brief.minutes >= 150 else 3
-    for depth in range(max_stops):
+    for _ in range(max_stops):
         expanded = []
         for route in frontier:
             for place in places:
@@ -316,8 +261,7 @@ def build_candidates(places, brief):
                 if failure:
                     reason, amount = failure
                     rejections[reason] += 1
-                    if reason not in closest or amount < closest[reason][0]:
-                        closest[reason] = (amount, place["name"])
+                    record_closest_failure(closest, reason, amount, place["name"])
                     continue
                 score = priorities(proposed, brief)
                 expanded.append((score, stops))
@@ -331,7 +275,7 @@ def build_candidates(places, brief):
             if key not in seen:
                 seen.add(key)
                 frontier.append(route)
-            if len(frontier) >= 64:
+            if len(frontier) >= BEAM_WIDTH:
                 break
         if not frontier:
             break
@@ -340,6 +284,7 @@ def build_candidates(places, brief):
 
 
 def validate_plan(stops, legs, brief):
+    """Rebuild the schedule using the final legs and recheck the mandatory activities."""
     plan, failure = schedule(stops, legs, brief)
     if plan and not meets_required(plan, brief):
         return None, ("required activity", 1)

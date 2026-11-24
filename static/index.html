@@ -1,35 +1,152 @@
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="theme-color" content="#123f3a"><title>Saturday Club · Perfect Saturday Planner</title>
-<meta name="description" content="Build a personal Saturday outing with real places, walking time and a budget that fits.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='9' fill='%23143f38'/%3E%3Ccircle cx='20' cy='20' r='10' fill='%23ffc64f'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/style.css"><script src="/static/app.js" defer></script></head>
-<body>
-<header><div class="bar"><a class="brand" href="/" aria-label="Saturday Club home"><span class="sun" aria-hidden="true">☀</span>Saturday Club</a><a class="nav" href="#planner">Outing planner</a></div></header>
-<main>
-<section class="hero" aria-labelledby="title"><div class="hero-copy"><div class="eyeline"><span class="line"></span> A FIELD GUIDE TO YOUR DAY OFF</div>
-<h1 id="title">Your Saturday,<br><em>sorted.</em></h1><p>A little fresh air, a good meal, a new corner of your city. Build an outing around your mood, time and budget.</p>
-<a class="jump" href="#planner">Plan my Saturday</a></div>
-<figure class="postcard"><img src="/static/saturday.webp" width="1240" height="827" alt="Illustrated coral pavilion and winding path beneath a golden sun in a Bengaluru park."><figcaption>Bengaluru, India <span>Saturday field notes</span></figcaption></figure></section>
-<section class="workspace" id="planner"><div class="input-card">
-<div class="heading-row"><div><p class="kicker">THE PLANNER</p><h2>What feels good?</h2></div></div>
-<form id="brief-form"><label for="brief">Describe your Saturday</label>
-<textarea id="brief" maxlength="3500" required rows="5" placeholder="I’m in Bangalore with ₹2,000 and four hours. I’d love a short walk, music and a vegetarian lunch…"></textarea>
-<div class="examples"><span>Try a brief</span><button data-sample="slow" type="button">Slow morning</button><button data-sample="budget" type="button">Under ₹300</button><button data-sample="art" type="button">Gallery day</button></div>
-<div class="actions"><button class="primary" id="submit" type="submit">Build my plan</button><button type="button" id="toggle-fields" class="text-button">Use a form</button></div>
-</form>
-<form id="fields-form" hidden><div class="fields">
-<label>City<input name="city" required maxlength="100" placeholder="Bengaluru"></label>
-<label>Total budget (₹)<input name="budget" required type="number" min="0" max="1000000" placeholder="2000"></label>
-<label>Available time<input name="available_time" required placeholder="4 hours or 90 minutes"></label>
-<label>Start time (IST)<input name="start_time" type="time" value="10:00" required></label>
-<label>Mood<input name="mood" maxlength="180" placeholder="Tired but curious"></label>
-<label>People<input name="people" type="number" min="1" max="30" value="1" required></label>
-<label class="wide">Interests, separated by commas<input name="interests" placeholder="Food, music, walks"></label>
-<label class="wide">Constraints, separated by commas<input name="constraints" placeholder="Vegetarian, avoid crowds"></label>
-<label class="wide">Starting point (optional)<input name="starting_area" placeholder="Leave blank to start at your first stop"></label>
-</div><div class="actions"><button class="primary" type="submit">Build my plan</button><button type="button" class="text-button" id="toggle-brief">Use free text</button></div></form>
-</div><aside class="guide"><p class="kicker">CITY GUIDE</p><h2>Pick a starting point.</h2><p>Explore a sourced neighbourhood guide, or describe your own outing.</p><div class="city-list"><button data-city="Bengaluru"><span>Bengaluru</span><small>Parks, vinyl & cafés</small></button><button data-city="Gurugram"><span>Gurugram</span><small>Photography & food</small></button><button data-city="Delhi"><span>Delhi</span><small>Heritage & books</small></button></div></aside></section>
-<section class="output" id="output" hidden tabindex="-1" aria-label="Your itinerary"><p class="kicker">YOUR FIELD NOTES</p><h2 id="result-title">Planning your Saturday</h2><p id="status" role="status"></p><div id="results"></div>
-<details id="trace"><summary>Planner trace</summary><ol id="trace-list"></ol></details></section>
-</main><footer><span>Saturday Club</span><span>Perfect Saturday Planner</span></footer></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="theme-color" content="#123f3a" />
+    <title>Saturday Club · Perfect Saturday Planner</title>
+    <meta
+      name="description"
+      content="Build a personal Saturday outing with real places, walking time and a budget that fits."
+    />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='9' fill='%23143f38'/%3E%3Ccircle cx='20' cy='20' r='10' fill='%23ffc64f'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/static/style.css" />
+    <script type="module" src="/static/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <div class="bar">
+        <a class="brand" href="/" aria-label="Saturday Club home"
+          ><span class="sun" aria-hidden="true">☀</span>Saturday Club</a
+        ><a class="nav" href="#planner">Outing planner</a>
+      </div>
+    </header>
+    <main>
+      <section class="hero" aria-labelledby="title">
+        <div class="hero-copy">
+          <div class="eyeline"><span class="line"></span> A FIELD GUIDE TO YOUR DAY OFF</div>
+          <h1 id="title">Your Saturday,<br /><em>sorted.</em></h1>
+          <p>
+            A little fresh air, a good meal, a new corner of your city. Build an outing around your
+            mood, time and budget.
+          </p>
+          <a class="jump" href="#planner">Plan my Saturday</a>
+        </div>
+        <figure class="postcard">
+          <img
+            src="/static/saturday.webp"
+            width="1240"
+            height="827"
+            alt="Illustrated coral pavilion and winding path beneath a golden sun in a Bengaluru park."
+          />
+          <figcaption>Bengaluru, India <span>Saturday field notes</span></figcaption>
+        </figure>
+      </section>
+      <section class="workspace" id="planner">
+        <div class="input-card">
+          <div class="heading-row">
+            <div>
+              <p class="kicker">THE PLANNER</p>
+              <h2>What feels good?</h2>
+            </div>
+          </div>
+          <form id="brief-form">
+            <label for="brief">Describe your Saturday</label>
+            <textarea
+              id="brief"
+              maxlength="3500"
+              required
+              rows="5"
+              placeholder="I’m in Bangalore with ₹2,000 and four hours. I’d love a short walk, music and a vegetarian lunch…"
+            ></textarea>
+            <div class="examples">
+              <span>Try a brief</span><button data-sample="slow" type="button">Slow morning</button
+              ><button data-sample="budget" type="button">Under ₹300</button
+              ><button data-sample="art" type="button">Gallery day</button>
+            </div>
+            <div class="actions">
+              <button class="primary" id="submit" type="submit">Build my plan</button
+              ><button type="button" id="toggle-fields" class="text-button">Use a form</button>
+            </div>
+          </form>
+          <form id="fields-form" hidden>
+            <div class="fields">
+              <label
+                >City<input name="city" required maxlength="100" placeholder="Bengaluru"
+              /></label>
+              <label
+                >Total budget (₹)<input
+                  name="budget"
+                  required
+                  type="number"
+                  min="0"
+                  max="1000000"
+                  placeholder="2000"
+              /></label>
+              <label
+                >Available time<input
+                  name="available_time"
+                  required
+                  placeholder="4 hours or 90 minutes"
+              /></label>
+              <label
+                >Start time (IST)<input name="start_time" type="time" value="10:00" required
+              /></label>
+              <label
+                >Mood<input name="mood" maxlength="180" placeholder="Tired but curious"
+              /></label>
+              <label
+                >People<input name="people" type="number" min="1" max="30" value="1" required
+              /></label>
+              <label class="wide"
+                >Interests, separated by commas<input
+                  name="interests"
+                  placeholder="Food, music, walks"
+              /></label>
+              <label class="wide"
+                >Constraints, separated by commas<input
+                  name="constraints"
+                  placeholder="Vegetarian, avoid crowds"
+              /></label>
+              <label class="wide"
+                >Starting point (optional)<input
+                  name="starting_area"
+                  placeholder="Leave blank to start at your first stop"
+              /></label>
+            </div>
+            <div class="actions">
+              <button class="primary" type="submit">Build my plan</button
+              ><button type="button" class="text-button" id="toggle-brief">Use free text</button>
+            </div>
+          </form>
+        </div>
+        <aside class="guide">
+          <p class="kicker">CITY GUIDE</p>
+          <h2>Pick a starting point.</h2>
+          <p>Explore a sourced neighbourhood guide, or describe your own outing.</p>
+          <div class="city-list">
+            <button data-city="Bengaluru">
+              <span>Bengaluru</span><small>Parks, vinyl & cafés</small></button
+            ><button data-city="Gurugram">
+              <span>Gurugram</span><small>Photography & food</small></button
+            ><button data-city="Delhi"><span>Delhi</span><small>Heritage & books</small></button>
+          </div>
+        </aside>
+      </section>
+      <section class="output" id="output" hidden tabindex="-1" aria-label="Your itinerary">
+        <p class="kicker">YOUR FIELD NOTES</p>
+        <h2 id="result-title">Planning your Saturday</h2>
+        <p id="status" role="status"></p>
+        <div id="results"></div>
+        <details id="trace">
+          <summary>Planner trace</summary>
+          <ol id="trace-list"></ol>
+        </details>
+      </section>
+    </main>
+    <footer><span>Saturday Club</span><span>Perfect Saturday Planner</span></footer>
+  </body>
+</html>

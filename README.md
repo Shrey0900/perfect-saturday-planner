@@ -26,11 +26,23 @@ Open http://127.0.0.1:8000. Run the checks with `python -m unittest -v`. Windows
 - Try a required live performance or an unverified dietary restriction. The planner explains missing evidence. For mixed-interest requests an unsupported diet can yield an explicitly labelled activities-only alternative. A food-only request explains which diet could not be verified.
 - Paste the assignment JSON as written. All six required fields are also available in the form.
 
+## Code walkthrough
+
+Start in [planner.py](planner.py) at `run_plan`. It reads the brief, asks for missing details, looks up eligible venues and hands them to `select_itinerary`. That loop tries candidates in score order and returns the first route that passes the final checks.
+
+| Question to explain during the demo | Where to look |
+| --- | --- |
+| How does “₹300, 90 minutes, books and vegetarian food” become usable input? | [preferences.py](preferences.py) extracts the budget, time and diet. [interests.py](interests.py) recognises activity names and classifies less explicit phrases. |
+| Why is a place eligible? | [constraints.py](constraints.py) turns requirements into venue checks. [places.py](places.py) applies them to the city guide and optional live results. [providers.py](providers.py) handles external API calls. |
+| Why does the ₹300 route wait for the bookshop to open? | In [itinerary.py](itinerary.py), `schedule` adds travel, buffers, opening waits and visits. `build_candidates` ranks feasible routes, and `validate_plan` runs the same arithmetic with the final travel estimates. |
+| Where do the user-facing reasons and the trace come from? | [explanations.py](explanations.py) uses the accepted route to describe each stop and its trade-offs. [main.py](main.py) streams the events emitted by the coordinator. |
+| How does the browser show the plan as it arrives? | [app.js](static/app.js) handles form and result state. [planner-api.js](static/planner-api.js) reads complete events from the stream. [plan-view.js](static/plan-view.js) renders the itinerary. |
+
 ## Planning workflow
 
 | Tool | Responsibility |
 | --- | --- |
-| `parse_preferences` | Validate structured input. For free text, optionally use the OpenAI Responses API. The key-free path uses a small supervised multinomial Naive Bayes classifier trained on the labelled phrases in preferences.py, with rules for budget, duration, dietary restrictions and city aliases. |
+| `parse_preferences` | Validate structured input. For free text, optionally use the OpenAI Responses API. The key-free path uses a small supervised multinomial Naive Bayes classifier trained on the labelled phrases in interests.py, with rules for budget, duration, dietary restrictions and city aliases. |
 | `find_places` | Search real nearby places through Geoapify when enabled. Supplement results with a versioned guide containing venue links, evidence, coordinates and the date checked. |
 | `build_candidates` | Explore up to five stops using bounded beam search. Rank primary interest coverage, useful visit time, pace, crowd assumptions and a full lunch when the window covers midday. Keep the budget as an upper limit. |
 | `estimate_route` | Estimate each transfer. Use free walking for short trips and a modelled auto for longer hops. Allow up to three live walking lookups per request. Keep the local estimate if a lookup fails. |

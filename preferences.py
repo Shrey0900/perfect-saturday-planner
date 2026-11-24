@@ -1,12 +1,12 @@
 """Interpret a brief into limits, interests and editable planning assumptions."""
 
 import json
-import math
 import re
-from collections import Counter
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from interests import interest_topics
 
 WORDS = {
     "one": "1",
@@ -32,150 +32,8 @@ CITIES = {
     "Dehradun": ["dehradun"],
     "Noida": ["noida"],
 }
-# Tiny supervised text classifier. Train a multinomial naive Bayes model on
-# labelled phrases and abstain on unfamiliar vocabulary or ambiguous clauses.
-EXAMPLES = {
-    "food": [
-        "food eats meals lunch dinner breakfast snack snacks",
-        "eat a vegetarian meal",
-        "sip coffee tea café cafe",
-        "taste local cuisine dishes",
-        "hungry restaurant dosa",
-    ],
-    "walks": [
-        "walk walks walking stroll wander outdoors",
-        "fresh air greenery gardens nature",
-        "park trees quiet picnic",
-        "stretch my legs in a garden",
-    ],
-    "art": [
-        "art paintings gallery galleries",
-        "museum museums exhibitions design",
-        "photography photographs sculpture",
-        "draw and sketch artwork",
-    ],
-    "books": [
-        "books bookshop bookstore bookshops",
-        "browse novels and poetry",
-        "read literature book browsing",
-        "reading fiction shelves",
-    ],
-    "music": [
-        "music listen acoustic gig concert",
-        "live performance jazz singing",
-        "vinyl records tunes bands",
-    ],
-    "history": [
-        "history heritage monuments architecture",
-        "historic buildings old city",
-        "historical landmarks fort palace",
-    ],
-    "fine dining": ["fine dining tasting menu upscale gourmet degustation"],
-    "trekking": ["trek trekking hiking mountain trail trek"],
-    "nightlife": ["nightlife clubbing nightclub dancefloor"],
-    "shopping": [
-        "shopping markets browse stalls",
-        "shop for gifts clothes handicrafts",
-        "souvenirs local crafts boutiques",
-    ],
-}
-STOPWORDS = set(
-    [
-        "a",
-        "an",
-        "the",
-        "to",
-        "of",
-        "in",
-        "on",
-        "at",
-        "from",
-        "for",
-        "and",
-        "or",
-        "with",
-        "my",
-        "me",
-        "i",
-        "we",
-        "want",
-        "would",
-        "like",
-        "our",
-        "but",
-        "something",
-        "some",
-        "by",
-    ]
-)
-
-
-def tokens(text):
-    return [word for word in re.findall(r"[a-zÀ-ž]+", text.lower()) if word not in STOPWORDS]
-
-
-COUNTS = {label: Counter(tokens(" ".join(phrases))) for label, phrases in EXAMPLES.items()}
-VOCAB = set().union(*COUNTS.values())
-
-
-def classify(text):
-    aliases = {
-        "fine dining": "fine dining",
-        "night life": "nightlife",
-        "ghoomna": "walks",
-        "tehelna": "walks",
-        "sair": "walks",
-        "khana": "food",
-        "khaana": "food",
-        "gaane": "music",
-        "sangeet": "music",
-        "kitaab": "books",
-        "kitabein": "books",
-        "किताब": "books",
-        "खाना": "food",
-        "संगीत": "music",
-    }
-    for phrase, topic in aliases.items():
-        if re.search(r"\b" + phrase + r"\b", text, re.IGNORECASE):
-            return topic
-    terms = [t for t in tokens(text) if t in VOCAB]
-    if not terms:
-        return None
-    scores = {}
-    for label, counts in COUNTS.items():
-        scores[label] = sum(
-            math.log((counts[t] + 0.25) / (sum(counts.values()) + 0.25 * len(VOCAB))) for t in terms
-        )
-    top, second = sorted(scores, key=scores.get, reverse=True)[:2]
-    return top if scores[top] - scores[second] > 0.45 else None
-
 
 Short = Annotated[str, Field(max_length=180)]
-
-
-# Recover explicit topic names before asking the single-label classifier to
-# interpret an ambiguous phrase. Preserve the order the visitor mentioned them.
-TOPIC_NAMES = {
-    **{topic: topic for topic in EXAMPLES},
-    "heritage": "history",
-    "walk": "walks",
-    "walking": "walks",
-    "books": "books",
-    "bookshops": "books",
-    "museums": "art",
-    "museum": "art",
-    "lunch": "food",
-    "dinner": "food",
-}
-TOPIC_PATTERN = re.compile(r"\b(?:" + "|".join(map(re.escape, TOPIC_NAMES)) + r")\b", re.I)
-
-
-def interest_topics(text):
-    named = [TOPIC_NAMES[m[0].lower()] for m in TOPIC_PATTERN.finditer(text)]
-    if named:
-        return list(dict.fromkeys(named))
-    inferred = classify(text)
-    return [inferred] if inferred else []
 
 
 def normalize_diet_spelling(text):
@@ -183,6 +41,8 @@ def normalize_diet_spelling(text):
 
 
 class Preferences(BaseModel):
+    """Validated visitor input shared by the JSON form, free-text parser and optional LLM."""
+
     model_config = ConfigDict(extra="ignore")
     city: Short = ""
     budget: int | None = Field(None, ge=0, le=1000000)
@@ -256,6 +116,7 @@ def normalize_numbers(text):
 
 
 def duration(text):
+    """Convert a time expression to minutes. Bare values from 1 through 12 mean hours."""
     normalized = normalize_numbers(str(text)).strip()
     if normalized.isdigit():
         number = int(normalized)
@@ -299,6 +160,7 @@ def amount(match):
 
 
 def extract_budget(text):
+    """Read total INR from the brief while excluding time expressions next to “budget”."""
     if re.search(r"\b(?:zero budget|free only|no spending)\b", text):
         return 0
     number = r"(\d+(?:,\d{3})*(?:\.\d+)?)\s*(k)?"
@@ -327,9 +189,31 @@ def extract_budget(text):
     return None
 
 
-def local_parse(text):
-    normalized = normalize_diet_spelling(normalize_numbers(text))
-    city = next(
+CONSTRAINT_RULES = [
+    (r"pure[\s-]*veg|veg(?:etarian)?[\s-]*only", "pure vegetarian"),
+    (r"\bvegan\b", "vegan"),
+    (r"\b(?:vegetarian|veg)\b", "vegetarian"),
+    (
+        r"(?:avoid|hate|no|away from|skip) crowds?|\b(?:uncrowded|crowded places|quiet places)\b",
+        "avoid crowds",
+    ),
+    (r"(?:indoors? only|stay indoors|no outdoors?)", "indoors only"),
+    (r"(?:outdoors? only|no indoors?)", "outdoors only"),
+    (r"wheelchair|step[\s-]*free", "wheelchair access"),
+    (r"(?:no walking|can't walk|cannot walk)", "no walking"),
+    (
+        r"(?:must|need|want|have to)(?: to)? (?:have|get|eat|include|grab)?\s*(?:a |some )?(?:meal|lunch|dinner|breakfast|food)\b",
+        "meal required",
+    ),
+    (
+        r"(?:live (?:music|show|gig) (?:is a must|only|required)|must (?:have|include) live music)",
+        "live performance required",
+    ),
+]
+
+
+def extract_city(normalized):
+    return next(
         (
             name
             for name, aliases in CITIES.items()
@@ -337,29 +221,11 @@ def local_parse(text):
         ),
         "",
     )
-    budget = extract_budget(normalized)
+
+
+def extract_constraints(normalized):
+    """Collect diet, mobility and mandatory requirements before finding places."""
     constraints = []
-    rules = [
-        (r"pure[\s-]*veg|veg(?:etarian)?[\s-]*only", "pure vegetarian"),
-        (r"\bvegan\b", "vegan"),
-        (r"\b(?:vegetarian|veg)\b", "vegetarian"),
-        (
-            r"(?:avoid|hate|no|away from|skip) crowds?|\b(?:uncrowded|crowded places|quiet places)\b",
-            "avoid crowds",
-        ),
-        (r"(?:indoors? only|stay indoors|no outdoors?)", "indoors only"),
-        (r"(?:outdoors? only|no indoors?)", "outdoors only"),
-        (r"wheelchair|step[\s-]*free", "wheelchair access"),
-        (r"(?:no walking|can't walk|cannot walk)", "no walking"),
-        (
-            r"(?:must|need|want|have to)(?: to)? (?:have|get|eat|include|grab)?\s*(?:a |some )?(?:meal|lunch|dinner|breakfast|food)\b",
-            "meal required",
-        ),
-        (
-            r"(?:live (?:music|show|gig) (?:is a must|only|required)|must (?:have|include) live music)",
-            "live performance required",
-        ),
-    ]
     diet_text = re.sub(NON_VEG, "", normalized)
     if re.search(r"\b(?:must|only|require)\b.{0,14}non[ -]?veg|non[ -]?veg only", normalized):
         constraints.append("meat required")
@@ -367,7 +233,7 @@ def local_parse(text):
         constraints.append("walking only")
     if re.search(r"\b(?:skip|no|without) (?:lunch|meals?|food)\b", normalized):
         constraints.append("skip meals")
-    for pattern, label in rules:
+    for pattern, label in CONSTRAINT_RULES:
         if re.search(
             pattern,
             diet_text if label in ("vegetarian", "pure vegetarian", "vegan") else normalized,
@@ -382,6 +248,12 @@ def local_parse(text):
             constraints.append(requirement[:160])
         if re.search(r"only quiet|must (?:be |avoid )?(?:quiet|crowds?)", requirement):
             constraints.append("strictly avoid crowds")
+    return constraints
+
+
+def extract_interests(normalized):
+    """Keep requested topics separate from explicit exclusions such as “no walks”."""
+    exclusions = []
     interests = []
     # Keep the shared negation in "no museums or walks". A new sentence
     # or a positive clause such as "but I like food" starts a fresh scope.
@@ -404,18 +276,32 @@ def local_parse(text):
         )
         for topic in topics:
             if negative:
-                constraints.append("avoid " + topic)
+                exclusions.append("avoid " + topic)
             elif topic not in interests:
                 interests.append(topic)
+    return interests, exclusions
+
+
+def group_size(normalized):
+    """Read an explicit party size or recognise wording for a couple."""
     group = re.search(
         r"\b(?:for|group of|party of)\s+(\d+)\s*(?:people|persons|adults|of us|friends)?\b(?!\s*(?:min|hour|hr))",
         normalized,
     )
-    people = (
+    return (
         int(group[1])
         if group
         else (2 if re.search(r"\b(?:both of us|as a couple|my partner and i)\b", normalized) else 1)
     )
+
+
+def local_parse(text):
+    """Extract an editable, validated brief from free text without any network requests."""
+    normalized = normalize_diet_spelling(normalize_numbers(text))
+    budget = extract_budget(normalized)
+    people = group_size(normalized)
+    interests, exclusions = extract_interests(normalized)
+    constraints = extract_constraints(normalized) + exclusions
     if people > 1 and budget is not None and re.search(r"per (?:person|head)|each\b", normalized):
         budget *= people
     area = re.search(
@@ -423,7 +309,7 @@ def local_parse(text):
         normalized,
     )
     return Preferences(
-        city=city,
+        city=extract_city(normalized),
         budget=budget,
         available_time=f"{duration(normalized)} minutes",
         mood=text[:180],
@@ -436,6 +322,7 @@ def local_parse(text):
 
 
 def decode_input(value):
+    """Validate a JSON object or pasted JSON; return None for ordinary free text."""
     if isinstance(value, str) and value.lstrip().startswith(("{", "[")):
         value = json.loads(value)
     if isinstance(value, dict):
@@ -445,3 +332,26 @@ def decode_input(value):
             "Describe the outing in up to 3,500 characters or paste the assignment JSON."
         )
     return None
+
+
+def questions(preferences, value):
+    """Identify missing inputs and ambiguity about whether a group budget is shared."""
+    missing = []
+    if not preferences.city:
+        missing.append("Which Indian city should I plan for?")
+    if preferences.budget is None:
+        missing.append("What is your total budget in rupees?")
+    minutes = duration(preferences.available_time)
+    if not 0 < minutes <= 1440:
+        missing.append("How much time do you have on Saturday? Try “4 hours” or “90 minutes”.")
+    if "clarify group budget" in preferences.constraints or (
+        isinstance(value, str)
+        and not value.lstrip().startswith("{")
+        and preferences.people > 1
+        and not re.search(
+            r"\b(total|together|each|per (person|head)|shared|between us)\b", value, re.IGNORECASE
+        )
+    ):
+        if preferences.budget is not None:
+            missing.append("What is the total budget for the whole group?")
+    return missing

@@ -4,7 +4,11 @@ import asyncio
 import math
 import os
 
+import httpx
+
 from preferences import Preferences, canonical_city
+
+PROVIDER_ERRORS = (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError)
 
 ROOT = "https://api.geoapify.com"
 SETTINGS = {
@@ -18,6 +22,7 @@ SETTINGS = {
 
 
 async def model_parse(client, text):
+    """Ask the configured OpenAI model for a brief that validates against the same input schema."""
     key = os.getenv("OPENAI_API_KEY")
     if not key:
         return None
@@ -68,6 +73,7 @@ async def geo(client, path, params):
 
 
 async def geocode(client, city, area=""):
+    """Resolve the city or starting area in India and reject ambiguous city-only area matches."""
     query = ", ".join(x for x in [area, city, "India"] if x)
     data = await geo(
         client,
@@ -86,6 +92,7 @@ async def geocode(client, city, area=""):
 
 
 def km(start, end):
+    """Return the great-circle distance in kilometres between two latitude/longitude pairs."""
     lat1, lon1, lat2, lon2 = map(math.radians, (*start, *end))
     haversine = (
         math.sin((lat2 - lat1) / 2) ** 2
@@ -95,6 +102,7 @@ def km(start, end):
 
 
 async def nearby(client, preferences, centre, kind, diet):
+    """Translate Geoapify records for one category into the guide’s common venue format."""
     category, tags, minutes, low, high = SETTINGS[kind]
     lat, lon = centre
     params = {
@@ -117,16 +125,9 @@ async def nearby(client, preferences, centre, kind, diet):
         raw = (properties.get("datasource") or {}).get("raw") or {}
         source = raw.get("website") or properties.get("website")
         if not isinstance(source, str) or not source.startswith(("http://", "https://")):
-            source = (
-                "https://www.openstreetmap.org/?mlat="
-                + str(properties["lat"])
-                + "&mlon="
-                + str(properties["lon"])
-                + "#map=18/"
-                + str(properties["lat"])
-                + "/"
-                + str(properties["lon"])
-            )
+            latitude = properties["lat"]
+            longitude = properties["lon"]
+            source = f"https://www.openstreetmap.org/?mlat={latitude}&mlon={longitude}#map=18/{latitude}/{longitude}"
         found.append(
             dict(
                 id=properties["place_id"],
@@ -158,9 +159,9 @@ async def nearby(client, preferences, centre, kind, diet):
 
 
 async def live_places(client, preferences, centre, interests, diet):
-    kinds = [
-        kind for kind, (_, tags, *_) in SETTINGS.items() if set(interests).intersection(tags)
-    ] or [
+    """Search up to four categories concurrently and keep results from successful calls."""
+    requested = set(interests)
+    kinds = [kind for kind, (_, tags, *_) in SETTINGS.items() if requested.intersection(tags)] or [
         "park",
         "restaurant",
         "museum",
@@ -173,6 +174,7 @@ async def live_places(client, preferences, centre, interests, diet):
 
 
 async def walk_route(client, points):
+    """Return whole walking minutes per leg when Geoapify supplies a complete route."""
     if len(points) < 2:
         return []
     data = await geo(
