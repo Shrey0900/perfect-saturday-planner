@@ -1,0 +1,412 @@
+[
+  {
+    "id": "blr-cubbon",
+    "name": "Cubbon Park",
+    "city": "Bengaluru",
+    "area": "Cubbon Park",
+    "lat": 12.975,
+    "lon": 77.59333,
+    "tags": [
+      "walks",
+      "nature",
+      "outdoors"
+    ],
+    "kind": "park",
+    "minutes": 35,
+    "low": 0,
+    "high": 0,
+    "veg": "none",
+    "source": "https://karnatakatourism.org/en/attractions/cubbon-park/",
+    "note": "Take a short loop through the park and turn back when you feel like it. General admission is free.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      360,
+      1080
+    ],
+    "price_basis": "Free public entry",
+    "price_source": "https://old.karnatakatourism.org/tour-item/cubbon-park/"
+  },
+  {
+    "id": "blr-map",
+    "name": "Museum of Art & Photography",
+    "city": "Bengaluru",
+    "area": "Kasturba Road",
+    "lat": 12.97455,
+    "lon": 77.59683,
+    "tags": [
+      "art",
+      "photography",
+      "history",
+      "indoors"
+    ],
+    "kind": "museum",
+    "minutes": 50,
+    "low": 0,
+    "high": 0,
+    "veg": "none",
+    "source": "https://map-india.org/visit-us/",
+    "note": "Browse the free ground-floor Infosys Gallery and the first-floor visual storage. Other exhibitions may require a ₹200 general pass.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      600,
+      1170
+    ],
+    "price_basis": "Free-access galleries only",
+    "wheelchair": true
+  },
+  {
+    "id": "blr-paa",
+    "name": "Paakashala, MG Road",
+    "city": "Bengaluru",
+    "area": "MG Road",
+    "lat": 12.97483,
+    "lon": 77.60844,
+    "tags": [
+      "food",
+      "coffee",
+      "indoors"
+    ],
+    "kind": "restaurant",
+    "minutes": 40,
+    "low": 150,
+    "high": 350,
+    "veg": "only",
+    "source": "https://paakashala.com/bangalore/veg-restaurant-in-mg-road/",
+    "note": "Try a masala dosa or bisibele bath at this all-vegetarian restaurant. The range is a per-person meal estimate.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      390,
+      1350
+    ],
+    "price_basis": "Estimated meal per person"
+  },
+  {
+    "id": "blr-coffee",
+    "name": "Indian Coffee House",
+    "city": "Bengaluru",
+    "area": "Church Street",
+    "lat": 12.97454,
+    "lon": 77.60525,
+    "tags": [
+      "food",
+      "coffee",
+      "indoors"
+    ],
+    "kind": "restaurant",
+    "minutes": 30,
+    "low": 60,
+    "high": 180,
+    "veg": "options",
+    "source": "https://indiarestros.com/r/indian-coffee-house-church-street-gn2a8sg8mk",
+    "note": "Sit down for filter coffee and a vegetable cutlet or dosa. The menu includes egg dishes alongside vegetarian choices. Spend is estimated.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      510,
+      1140
+    ],
+    "price_basis": "Estimated light meal per person"
+  },
+  {
+    "id": "blr-blossom",
+    "name": "Blossom Book House",
+    "city": "Bengaluru",
+    "area": "Church Street",
+    "lat": 12.97429,
+    "lon": 77.60693,
+    "tags": [
+      "books",
+      "music",
+      "shopping",
+      "indoors"
+    ],
+    "kind": "bookshop",
+    "minutes": 35,
+    "low": 0,
+    "high": 0,
+    "veg": "none",
+    "source": "https://thevinylmap.com/record-stores/india/bengaluru/blossom-book-house/",
+    "note": "Browse the books at the branch above Matteo Coffea and ask about the vinyl selection. Stock varies. Purchases are optional.",
+    "checked_on": "2026-11-24",
+    "price_basis": "Browsing only; purchases are extra"
+  },
+  {
+    "id": "blr-kcdas",
+    "name": "K. C. Das",
+    "city": "Bengaluru",
+    "area": "St Marks Road",
+    "lat": 12.97587,
+    "lon": 77.60179,
+    "tags": [
+      "food",
+      "desserts",
+      "indoors"
+    ],
+    "kind": "restaurant",
+    "minutes": 20,
+    "low": 100,
+    "high": 240,
+    "veg": "only",
+    "source": "https://indiarestros.com/r/k-c-das-st-marks-road-bjknq7e0f5",
+    "note": "Pick a Bengali sweet or a savoury snack from the listed all-vegetarian menu. Spend is an estimate for a snack stop.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      600,
+      1320
+    ],
+    "price_basis": "Estimated snacks per person",
+    "meal_type": "snack"
+  },
+  {
+    "id": "blr-ime",
+    "name": "Indian Music Experience Museum",
+    "city": "Bengaluru",
+    "area": "JP Nagar",
+    "lat": 12.8918,
+    "lon": 77.58358,
+    "tags": [
+      "music",
+      "history",
+      "indoors"
+    ],
+    "kind": "museum",
+    "minutes": 90,
+    "low": 250,
+    "high": 550,
+    "veg": "none",
+    "source": "https://cap-in.bookmyshow.com/activities/indian-music-experience/ET00088164",
+    "note": "Explore interactive music exhibits in JP Nagar. Check the ticket page for your visitor category and current Saturday price.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      660,
+      1140
+    ],
+    "price_basis": "Estimated weekend admission; verify before visiting",
+    "coordinate_source": "https://mapcarta.com/N10238264062"
+  },
+  {
+    "id": "ggn-leisure",
+    "name": "Leisure Valley Park",
+    "city": "Gurugram",
+    "area": "Sector 29",
+    "lat": 28.4689,
+    "lon": 77.0664,
+    "tags": [
+      "walks",
+      "nature",
+      "outdoors"
+    ],
+    "kind": "park",
+    "minutes": 35,
+    "low": 0,
+    "high": 0,
+    "veg": "none",
+    "source": "https://www.haryana.com/tourism/leisure-valley-park-gurugram",
+    "note": "Walk through the lawns in Sector 29. General entry is listed as free. Weekend footfall can vary.",
+    "checked_on": "2026-11-24",
+    "price_basis": "Free public entry",
+    "coordinate_source": "https://www.tripandstays.com/stays/destinationideas/leisure-valley-park"
+  },
+  {
+    "id": "ggn-bikaner",
+    "name": "Bikanervala, Sector 29",
+    "city": "Gurugram",
+    "area": "Sector 29",
+    "lat": 28.46896,
+    "lon": 77.06364,
+    "tags": [
+      "food",
+      "desserts",
+      "indoors"
+    ],
+    "kind": "restaurant",
+    "minutes": 35,
+    "low": 120,
+    "high": 300,
+    "veg": "only",
+    "source": "https://bikanervala.com/pages/sector-29-gurugram",
+    "note": "Stop for chaat or a vegetarian meal close to Leisure Valley Park. The amount is an estimate for one diner.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      510,
+      1350
+    ],
+    "hours_source": "https://order.bikanervala.com/store-locator/gurugram/bikanervala-sector-29-gurgaon",
+    "price_basis": "Estimated light meal per person"
+  },
+  {
+    "id": "ggn-museo",
+    "name": "Museo Camera",
+    "city": "Gurugram",
+    "area": "DLF Phase IV",
+    "lat": 28.46969,
+    "lon": 77.08042,
+    "tags": [
+      "art",
+      "photography",
+      "history",
+      "indoors"
+    ],
+    "kind": "museum",
+    "minutes": 55,
+    "low": 200,
+    "high": 300,
+    "veg": "none",
+    "source": "https://www.museocamera.org/visits",
+    "note": "Look closely at the cameras and photography collection. The posted entry fee is ₹200 for Indian nationals and ₹300 for foreign nationals.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      660,
+      1140
+    ],
+    "price_basis": "Published ordinary admission, by nationality"
+  },
+  {
+    "id": "ggn-fig",
+    "name": "Fig at Museo",
+    "city": "Gurugram",
+    "area": "DLF Phase IV",
+    "lat": 28.46969,
+    "lon": 77.08042,
+    "tags": [
+      "food",
+      "coffee",
+      "indoors"
+    ],
+    "kind": "restaurant",
+    "minutes": 40,
+    "low": 450,
+    "high": 950,
+    "veg": "options",
+    "source": "https://www.tripadvisor.com/Restaurant_Review-g297615-d19860481-Reviews-Fig_at_Museo-Gurugram_Gurgaon_Gurgaon_District_Haryana.html",
+    "note": "Settle into the café at Museo Camera. Vegetarian dishes are available alongside other dishes. The range is a per-person estimate.",
+    "checked_on": "2026-11-24",
+    "price_basis": "Estimated café meal per person"
+  },
+  {
+    "id": "ggn-burma",
+    "name": "Burma Burma, Cyber Hub",
+    "city": "Gurugram",
+    "area": "DLF Cyber City",
+    "lat": 28.49465,
+    "lon": 77.08851,
+    "tags": [
+      "food",
+      "tea",
+      "indoors"
+    ],
+    "kind": "restaurant",
+    "minutes": 55,
+    "low": 650,
+    "high": 1450,
+    "veg": "only",
+    "source": "https://burmaburma.in/gurugram",
+    "note": "Choose a Burmese noodle bowl or tea at the vegetarian Cyber Hub branch. The amount is an estimate for one diner.",
+    "checked_on": "2026-11-24",
+    "price_basis": "Estimated restaurant spend per person",
+    "diet_source": "https://www.zomato.com/ncr/burma-burma-cyber-hub-dlf-cyber-city-gurgaon"
+  },
+  {
+    "id": "del-baoli",
+    "name": "Agrasen ki Baoli",
+    "city": "Delhi",
+    "area": "Hailey Road",
+    "lat": 28.62611,
+    "lon": 77.225,
+    "tags": [
+      "walks",
+      "architecture",
+      "photography",
+      "history",
+      "outdoors"
+    ],
+    "kind": "museum",
+    "minutes": 30,
+    "low": 0,
+    "high": 0,
+    "veg": "none",
+    "source": "https://www.delhitourism.gov.in/dt/explore_the_city/agrasen_ki_baoli.html",
+    "note": "Look down the old stepwell from the upper level. Reaching the lower levels means descending stone steps.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      540,
+      1050
+    ],
+    "price_basis": "Free public entry",
+    "price_source": "https://delhiatlas.in/places/agrasen-ki-baoli/"
+  },
+  {
+    "id": "del-oxford",
+    "name": "Oxford Bookstore",
+    "city": "Delhi",
+    "area": "Barakhamba Road",
+    "lat": 28.63112,
+    "lon": 77.22165,
+    "tags": [
+      "books",
+      "shopping",
+      "indoors"
+    ],
+    "kind": "bookshop",
+    "minutes": 35,
+    "low": 0,
+    "high": 0,
+    "veg": "none",
+    "source": "https://oxfordbookstore.com/pages/oxford-bookstore-locations",
+    "note": "Browse the shelves at the Barakhamba Road shop in Gopal Das Bhawan. Book purchases are optional.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      600,
+      1320
+    ],
+    "price_basis": "Browsing only; purchases are extra"
+  },
+  {
+    "id": "del-saravanaa",
+    "name": "Saravanaa Bhavan, Janpath",
+    "city": "Delhi",
+    "area": "Janpath",
+    "lat": 28.627,
+    "lon": 77.21977,
+    "tags": [
+      "food",
+      "coffee",
+      "indoors"
+    ],
+    "kind": "restaurant",
+    "minutes": 40,
+    "low": 200,
+    "high": 450,
+    "veg": "only",
+    "source": "https://www.zomato.com/ncr/saravana-bhavan-janpath-new-delhi",
+    "note": "Stop for a South Indian vegetarian meal on Janpath. The range is a per-person estimate and queues may affect timing.",
+    "checked_on": "2026-11-24",
+    "price_basis": "Estimated meal per person",
+    "diet_source": "https://v1.saravanabhavan.com/find-us"
+  },
+  {
+    "id": "del-charkha",
+    "name": "National Charkha Museum",
+    "city": "Delhi",
+    "area": "Connaught Place",
+    "lat": 28.63143,
+    "lon": 77.2174,
+    "tags": [
+      "art",
+      "history",
+      "indoors"
+    ],
+    "kind": "museum",
+    "minutes": 30,
+    "low": 20,
+    "high": 100,
+    "veg": "none",
+    "source": "https://www.delhitourism.gov.in/dt/explore_the_city/national_charkha_museum.html",
+    "note": "Trace the history of the spinning wheel through the exhibition at Palika Bazaar Garden. Check the current entry fee on arrival.",
+    "checked_on": "2026-11-24",
+    "hours": [
+      600,
+      1260
+    ],
+    "price_basis": "Estimated admission allowance; exact fee unverified"
+  }
+]
