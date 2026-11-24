@@ -1,221 +1,412 @@
-"""Finite itinerary search. Prices, distance and time are computed outside the model."""
-import itertools
+"""Coordinate the planning tools and stream the evidence behind each decision."""
+
 import json
-import math
 import os
 import re
-from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
 import httpx
 from pydantic import ValidationError
-from preferences import Preferences, canonical_city, classify, decode_input, duration, local_parse
-from providers import geocode, km, live_places, model_parse, walk_route
 
-CATALOGUE=json.loads((Path(__file__).parent/"data/places.json").read_text())
-BANGALORE_EXAMPLE="I'm in Bangalore with ₹2,000 and 4 hours. I'm tired but want to get out. I like food, music and walks. I'm vegetarian and want to avoid crowded places."
-DEFAULT_TAGS=["walks","food","art"]
-FALLBACK_CITIES=sorted({r["city"] for r in CATALOGUE})
+from itinerary import (
+    Brief,
+    build_candidates,
+    evidence,
+    includes_lunch,
+    interpret_constraints,
+    position,
+    route_legs,
+    schedule,
+    suitable,
+    validate_plan,
+)
+from preferences import canonical_city, classify, decode_input, duration, local_parse
+from providers import geocode, live_places, model_parse, walk_route
 
-def progress(tool, message):
-    return {"type":"progress","tool":tool,"message":message}
+CATALOGUE = json.loads((Path(__file__).parent / "data/places.json").read_text())
+FALLBACK_CITIES = sorted({place["city"] for place in CATALOGUE})
+BANGALORE_EXAMPLE = "I'm in Bangalore with ₹2,000 and 4 hours. I'm tired but want to get out. I like food, music and walks. I'm vegetarian and want to avoid crowded places."
+PROVIDER_ERRORS = (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError)
 
-def restrictions(p):
-    s=" | ".join(p.constraints).lower()
-    diet="vegan" if "vegan" in s else "only" if re.search(r"pure.?veg|vegetarian.?only|only vegetarian",s) else "options" if re.search(r"\bveg(etarian)?\b",s) else ""
-    excluded=set()
-    required=set()
-    flags=set()
-    unknown=[]
-    for item in p.constraints:
-        t=item.lower().strip()
-        if not t: continue
-        if re.search("wheelchair|step.free|accessible entrance",t): flags.add("accessible")
-        elif re.search("no walking|cannot walk|can't walk|no walks",t): flags.add("no_walk")
-        elif re.search("live (music|performance|show|gig)",t): flags.add("live")
-        elif re.search("crowd|quiet|peaceful",t):
-            flags.add("crowds")
-            if re.search("must|only|guarantee|strictly",t): flags.add("confirmed_quiet")
-        elif re.search("indoor|avoid (?:the )?(?:heat|sun|outdoor)",t): flags.add("indoor")
-        elif re.search("outdoor",t): flags.add("outdoor")
-        elif re.search(r"no (?:stairs|steps)",t): flags.add("accessible")
-        elif re.search(r"(?:no|avoid|skip|dislike)\b",t) and classify(t):
-            excluded.add(classify(t))
-        elif re.search(r"meal required|must|need|include|mandatory|required",t) and classify(t):
-            required.add(classify(t))
-        elif re.search(r"\b(?:veg|vegetarian|vegan)\b|pure.veg|^none$|no constraints|no restrictions",t): pass
-        else: unknown.append(item)
-    return diet,excluded,required,flags,unknown
 
-def qualifies(place, diet, excluded, flags):
-    tags=set(place["tags"])
-    if tags & excluded: return False
-    if "accessible" in flags and not place.get("accessible"): return False
-    if "indoor" in flags and not ("indoors" in tags or place["kind"] in ("restaurant","museum","gallery","bookshop") and "outdoors" not in tags): return False
-    if "outdoor" in flags and not ("outdoors" in tags or place["kind"]=="park"): return False
-    if "no_walk" in flags and ("walks" in tags or place["kind"]=="park"): return False
-    if diet and place["kind"]=="restaurant":
-        ok={"only":{"only"},"options":{"only","options","vegan"},"vegan":{"vegan"}}
-        return place["veg"] in ok[diet]
-    return True
+def event(tool, inputs, outputs, message):
+    return {
+        "type": "progress",
+        "tool": tool,
+        "inputs": inputs,
+        "outputs": outputs,
+        "message": message,
+    }
 
-def clock(minute):
-    return f"{minute//60:02d}:{minute%60:02d}"
 
-def position(row): return (row["lat"],row["lon"])
+async def parse_preferences(client, value):
+    preferences = decode_input(value)
+    if preferences is not None:
+        return preferences, "Structured input"
+    try:
+        preferences = await model_parse(client, value)
+    except PROVIDER_ERRORS:
+        preferences = None
+    return (
+        (preferences, "Language model")
+        if preferences
+        else (local_parse(value), "Local interest classifier")
+    )
 
-def approximate_legs(points):
-    # Local estimate includes a street detour and time at crossings.
-    return [0 if a==b else max(2,math.ceil(km(a,b)*1.4/4.2*60)+2) for a,b in zip(points,points[1:])]
 
-def build_candidates(rows,p,tags,required,flags,origin):
-    tired=bool(re.search(r"tired|low.energy|relax|gentle|slow|exhaust|laid.back",p.mood,re.I))
-    scored=[]
-    for length in range(1,min(3,len(rows))+1):
-        for stops in itertools.permutations(rows,length):
-            kinds=[r["kind"] for r in stops]
-            if len(set(kinds))<length: continue
-            covered=set().union(*(r["tags"] for r in stops))
-            if not required <= covered: continue
-            points=([origin] if origin else [])+[position(r) for r in stops]
-            legs=approximate_legs(points)
-            if any(m>(25 if tired else 40) for m in legs) or ("no_walk" in flags and any(legs)): continue
-            value=16*len(set(tags)&covered)+2*length-0.20*sum(legs)
-            if tired: value-=2*(length-1)+0.09*sum(legs)
-            if "crowds" in flags: value-=4*kinds.count("market")
-            # Prefer a meal as the final anchor when the fit is otherwise comparable.
-            if length>1 and kinds[-1]=="restaurant": value+=1
-            value-=sum(r["high"] for r in stops)/max(100,p.budget+1)
-            scored.append((value,stops,points,legs))
-    return sorted(scored,key=lambda item:-item[0])
+def questions(preferences, value):
+    missing = []
+    if not preferences.city:
+        missing.append("Which Indian city should I plan for?")
+    if preferences.budget is None:
+        missing.append("What is your total budget in rupees?")
+    minutes = duration(preferences.available_time)
+    if not 0 < minutes <= 1440:
+        missing.append("How much time do you have on Saturday? Try “4 hours” or “90 minutes”.")
+    if "clarify group budget" in preferences.constraints or (
+        isinstance(value, str)
+        and not value.lstrip().startswith("{")
+        and preferences.people > 1
+        and not re.search(
+            r"\b(total|together|each|per (person|head)|shared|between us)\b", value, re.IGNORECASE
+        )
+    ):
+        if preferences.budget is not None:
+            missing.append("What is the total budget for the whole group?")
+    return missing
 
-def validate_plan(stops,legs,p,total_minutes):
-    start_h,start_m=map(int,p.start_time.split(":"))
-    start=start_h*60+start_m
-    at=start
-    low=high=0
-    timeline=[]
-    walk_offset=len(legs)-len(stops)+1
-    for i,stop in enumerate(stops):
-        leg_idx=i-1+walk_offset
-        walk=legs[leg_idx] if leg_idx>=0 else 0
-        buffer=5 if walk else 0
-        at+=walk+buffer
-        end=at+stop["minutes"]
-        opening=stop.get("hours")
-        if opening and not (opening[0]<=at and end<=opening[1]): return None,"opening hours"
-        if end>24*60: return None,"Saturday ends"
-        low+=stop["low"]*p.people
-        high+=stop["high"]*p.people
-        timeline.append({"place":stop,"start":clock(at),"end":clock(end),"walk":walk,"buffer":buffer})
-        at=end
-    if high>p.budget: return None,"budget"
-    if at-start>total_minutes: return None,"available time"
-    return {"stops":timeline,"low":low,"high":high,"total":at-start,"walk":sum(legs),
-            "spare":total_minutes-(at-start),"budget_left":p.budget-high},""
 
-def explain(stop,p,tags,diet):
-    r=stop["place"]
-    matches=[t for t in tags if t in r["tags"]]
-    reasons=["Matches your interest in "+", ".join(matches)+"."] if matches else []
-    if r["kind"]=="restaurant" and diet:
-        reasons.append({"only":"The source identifies this as a vegetarian-only venue.",
-            "options":"The source lists vegetarian food here.","vegan":"The listing includes vegan food."}[diet])
-    if re.search(r"tired|gentle|relax|low.energy",p.mood,re.I):
-        reasons.append(f"A {r['minutes']}-minute stop keeps this part of the day manageable.")
-    return " ".join(reasons) or f"A {r['minutes']}-minute visit fits your available time."
+async def find_places(client, preferences, interests, limits):
+    local = [p for p in CATALOGUE if p["city"] == preferences.city]
+    starting = preferences.starting_area.strip().casefold()
+    match = next((p for p in local if starting and p["name"].casefold() == starting), None)
+    origin = position(match) if match else None
+    live = []
+    if os.getenv("GEOAPIFY_API_KEY"):
+        try:
+            centre = origin or await geocode(client, preferences.city, preferences.starting_area)
+            if starting:
+                origin = centre
+            if centre:
+                topics = list(dict.fromkeys([*interests, *limits.required, "food"]))
+                live = await live_places(client, preferences, centre, topics, limits.diet)
+        except PROVIDER_ERRORS:
+            pass
+    merged = {p["name"].casefold(): p for p in [*live, *local]}
+    records = [{"food_role": "", **place} for place in merged.values()]
+    eligible = [place for place in records if suitable(place, limits)]
+    source = (
+        "Live place search and city guide"
+        if live and local
+        else "Live place search"
+        if live
+        else "Sourced city guide"
+    )
+    return eligible, origin, source, len(records)
+
+
+async def estimate_route(client, stops, brief, local_cache, lookups):
+    legs = [dict(leg) for leg in route_legs(stops, brief, local_cache)]
+    previous = brief.origin
+    for stop, leg in zip(stops, legs):
+        end = position(stop)
+        key = (previous, end)
+        if os.getenv("GEOAPIFY_API_KEY") and leg["mode"] == "walk" and leg["minutes"]:
+            if key not in lookups and len(lookups) < 3:
+                try:
+                    result = await walk_route(client, [previous, end])
+                    lookups[key] = result[0] if result else None
+                except PROVIDER_ERRORS:
+                    lookups[key] = None
+            if lookups.get(key) is not None:
+                leg.update(minutes=lookups[key], source="Geoapify walking route")
+            elif key in lookups:
+                leg["source"] = "local walking estimate; live route unavailable"
+        previous = end
+    return legs
+
+
+def explain_stop(stop, brief, previous):
+    place = stop["place"]
+    matches = [tag for tag in brief.interests if evidence(place, tag) == 1]
+    indirect = [tag for tag in brief.interests if 0 < evidence(place, tag) < 1]
+    if place.get("food_role") == "meal":
+        meal_name = "lunch" if 705 <= stop["start_minute"] <= 840 else "a sit-down meal"
+        reason = f"Time for {meal_name} at {stop['start']}. Allow ₹{place['low']}–₹{place['high']} per person."
+        if brief.limits.diet:
+            reason += (
+                " "
+                + {
+                    "only": "The venue is listed as vegetarian-only.",
+                    "options": "Vegetarian dishes are listed.",
+                    "vegan": "The listing includes vegan options.",
+                }[brief.limits.diet]
+            )
+    elif indirect and not matches and "music" in indirect and place["kind"] == "bookshop":
+        reason = "A nearby vinyl-browsing option for your music interest. Stock varies and there is no confirmed performance."
+    elif matches:
+        reason = (
+            f"{place['name']} gives you {place['minutes']} minutes for " + ", ".join(matches) + "."
+        )
+    else:
+        reason = f"This {place['kind']} is an alternative in {place['area']}, with {place['minutes']} minutes to explore."
+    if previous:
+        leg = stop["leg"]
+        reason += f" It is about {leg['minutes']} minutes from {previous['name']} by " + (
+            "auto." if leg["mode"] == "auto" else "foot."
+        )
+    elif brief.tired and place["kind"] == "park":
+        reason += " Start with a short loop and turn back whenever you feel ready."
+    return reason
+
+
+def alternative_note(tag, places, plan, brief, cache):
+    choices = [p for p in places if evidence(p, tag) == 1]
+    if not choices:
+        return f"No primary {tag} venue is documented among the {len(places)} eligible places in this search."
+    current = tuple(s["place"] for s in plan["stops"])
+    cheapest = min(choices, key=lambda p: p["high"])
+    price = cheapest["high"] * brief.preferences.people
+    if price > brief.preferences.budget:
+        return f"{cheapest['name']} is a {tag} option, but its upper estimate of ₹{price:,} exceeds the ₹{brief.preferences.budget:,} budget."
+    for choice in choices:
+        stops = current + (choice,)
+        legs = route_legs(stops, brief, cache)
+        _, failure = schedule(stops, legs, brief)
+        if failure:
+            cause, amount = failure
+            units = {
+                "budget": f"₹{amount:,} over budget",
+                "time": f"{amount} minutes over your time limit",
+                "closing time": f"{amount} minutes past closing",
+                "opens later": f"{amount} minutes before opening",
+            }
+            if cause in units:
+                return f"Adding {choice['name']} for {tag} after this route would put it {units[cause]}."
+    return f"{cheapest['name']} is another {tag} option. Allow {cheapest['minutes']} minutes and up to ₹{price:,} for the visit."
+
+
+def finish_plan(plan, brief, places, cache, source, candidates):
+    prefs = brief.preferences
+    notes = []
+    stops = plan["stops"]
+    for index, stop in enumerate(stops):
+        stop["why"] = explain_stop(stop, brief, stops[index - 1]["place"] if index else None)
+    unmatched = [
+        topic
+        for topic in brief.interests
+        if not any(evidence(s["place"], topic) == 1 for s in stops)
+    ]
+    for topic in unmatched:
+        notes.append(alternative_note(topic, places, plan, brief, cache))
+    if brief.limits.food_uncertain:
+        notes.insert(
+            0,
+            "Activities-only alternative. No food stop is included because the sources cannot verify "
+            + ", ".join(brief.limits.food_uncertain)
+            + ".",
+        )
+    if brief.lunch and not includes_lunch(plan):
+        meals = [p for p in places if p.get("food_role") == "meal"]
+        if meals:
+            cheapest = min(p["high"] * prefs.people for p in meals)
+            notes.append(
+                f"No lunch fits the selected outing. The lowest upper estimate for a full meal is ₹{cheapest:,}; your total budget is ₹{prefs.budget:,}."
+            )
+        else:
+            notes.append("There is no documented full meal meeting these constraints.")
+    if plan["spare"] >= max(60, brief.minutes * 0.3):
+        free = sum(p["high"] == 0 for p in places)
+        notes.append(
+            f"This outing uses {plan['total']} of {brief.minutes} minutes. The local search found {free} zero-spend stops among {len(places)} eligible venues; {plan['spare']} minutes remain unscheduled."
+        )
+        for _, longer in candidates:
+            extra = [p for p in longer if p["id"] not in {s["place"]["id"] for s in stops}]
+            if not extra or not all(p["high"] == 0 for p in extra):
+                continue
+            alternative, _ = schedule(longer, route_legs(longer, brief, cache), brief)
+            if alternative and alternative["total"] > plan["total"] + 20:
+                addition = extra[0]
+                reason = (
+                    f" Its Saturday crowd level is assumed {addition.get('crowd', 'unknown')}."
+                    if "crowds" in brief.limits.flags
+                    else ""
+                )
+                notes.append(
+                    f"A longer option includes {addition['name']} and uses {alternative['total']} minutes in total.{reason}"
+                )
+                break
+    if "crowds" in brief.limits.flags:
+        notes.append(
+            "Lower estimated Saturday crowds were favoured. Crowd labels are planning assumptions, not live readings."
+        )
+    if any(not stop["place"].get("hours") for stop in stops):
+        notes.append(
+            "Unknown-hours venues use a conservative 10:00–18:00 planning window. Confirm opening before leaving."
+        )
+    if any(stop["leg"]["mode"] == "auto" for stop in stops):
+        rides = [stop["leg"] for stop in stops if stop["leg"]["mode"] == "auto"]
+        saved = sum(leg["walk_alternative"] - leg["minutes"] for leg in rides)
+        fare = sum(leg["high"] for leg in rides)
+        notes.append(
+            f"The estimated auto fares add up to ₹{fare:,} at the upper end and save about {saved} minutes against walking the same legs. Traffic and actual fares can vary."
+        )
+    if any("unavailable" in stop["leg"]["source"] for stop in stops):
+        notes.append("Live routing was unavailable. Walking times use local distance estimates.")
+    notes.append(
+        "The return trip is extra."
+        + (
+            " The clock starts at the first stop."
+            if not brief.origin
+            else " Travel from the specified starting point is included."
+        )
+    )
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    saturday = today + timedelta(days=(5 - today.weekday()) % 7)
+    no_primary = bool(brief.interests) and len(unmatched) == len(brief.interests)
+    return dict(
+        type="plan",
+        **plan,
+        preferences=prefs.model_dump(),
+        date=saturday.isoformat(),
+        source=source,
+        notes=notes,
+        partial=bool(brief.limits.food_uncertain or no_primary),
+        unmatched=unmatched,
+    )
+
+
+def explain_failure(closest):
+    if not closest:
+        return "None of the available stops meets your required activities or travel constraints."
+    phrases = []
+    if "budget" in closest:
+        gap, name = closest["budget"]
+        phrases.append(f"{name} would take at least ₹{gap:,} more in the estimate")
+    if "time" in closest:
+        gap, name = closest["time"]
+        phrases.append(f"{name} needs {gap} more minutes")
+    if not phrases:
+        return "The available venues are closed or unconfirmed at this time. Try an earlier start."
+    return "No outing fits. " + "; ".join(phrases) + "."
+
 
 async def run_plan(value):
-    try:
-        p=decode_input(value)
-        async with httpx.AsyncClient(timeout=12,trust_env=False) as client:
-            if p is None:
-                try: p=await model_parse(client,value)
-                except (httpx.HTTPError,ValueError,KeyError,TypeError): p=None
-                method="Language model" if p else "Local interest classifier"
-                if not p: p=local_parse(value)
-            else: method="Structured input"
-            p.city=canonical_city(p.city)
-            total_minutes=duration(p.available_time)
-            yield progress("parse_preferences",method+" interpreted the request.")
-            missing=[]
-            if not p.city: missing.append("Which Indian city are you starting in?")
-            if p.budget is None or not total_minutes: missing.append("What are your total budget in rupees and available time?")
-            if "clarify group budget" in p.constraints or (isinstance(value,str) and p.people>1 and not re.search(r"\b(total|together|each|per (person|head)|shared|between us)\b",value,re.I)):
-                missing.append("What is the total budget for your group?")
-            if missing or total_minutes>1440:
-                yield {"type":"clarify","message":" ".join(missing[:2]) or "How much time do you have on Saturday, up to 24 hours?",
-                       "preferences":p.model_dump()};return
-            diet,excluded,required,flags,unknown=restrictions(p)
-            if unknown or flags.intersection({"live","confirmed_quiet"}):
-                message=("I can’t verify this requirement from the available place records: "+", ".join(unknown)+".") if unknown else (
-                    "I don’t have Saturday-specific performance listings." if "live" in flags else "I don’t have confirmed live crowd levels.")
-                yield {"type":"empty","message":message+" Edit that requirement if it is flexible.","preferences":p.model_dump()};return
-            tags=list(dict.fromkeys(classify(t) or t.lower() for t in p.interests)) or DEFAULT_TAGS
-            tags=[t for t in tags if t not in excluded]
-            local=[r for r in CATALOGUE if r["city"]==p.city]
-            origin=None
-            if p.starting_area:
-                match=next((r for r in local if p.starting_area.casefold()==r["name"].casefold()),None)
-                if match: origin=position(match)
-            live=[]
-            have_geo=bool(os.getenv("GEOAPIFY_API_KEY"))
-            if have_geo:
-                try:
-                    centre=origin or await geocode(client,p.city,p.starting_area)
-                    if p.starting_area: origin=centre
-                    if centre: live=await live_places(client,p,centre,tags+list(required),diet)
-                except (httpx.HTTPError,ValueError,KeyError,TypeError): pass
-            if p.starting_area and not origin:
-                yield {"type":"clarify","message":"I couldn’t locate that starting point. Enter a listed venue as the starting point, or leave it blank to start the clock at the first stop.","preferences":p.model_dump()};return
-            records={r["name"].casefold():r for r in live}
-            records.update({r["name"].casefold():r for r in local})
-            rows=[r for r in records.values() if qualifies(r,diet,excluded,flags)]
-            source=("Live place search and city guide" if live and local else "Live place search" if live else "Sourced city guide")
-            yield progress("find_places",f"{source}: {len(records)} named places found; {len(rows)} passed the filters.")
-            if not rows:
-                message=(f"I have no usable place data for {p.city} right now. The city guide covers "+", ".join(FALLBACK_CITIES)+".") if not records else "No venues have evidence for all of those constraints. Try another area, or edit a flexible preference."
-                yield {"type":"empty","message":message,"preferences":p.model_dump()};return
-            ranked=build_candidates(rows,p,tags,required,flags,origin)
-            yield progress("build_candidates",f"Compared {len(ranked)} nearby outings against your interests and energy.")
-            result=None
-            rejects=Counter()
-            route_calls=0
-            for _,stops,points,legs in ranked:
-                candidate,reason=validate_plan(stops,legs,p,total_minutes)
-                if not candidate and reason!="available time":
-                    rejects[reason]+=1;continue
-                route_mode="Walking times are neighbourhood estimates."
-                if have_geo and legs:
-                    if route_calls>=3: continue
-                    route_calls+=1
-                    try: routed=await walk_route(client,points)
-                    except (httpx.HTTPError,KeyError,IndexError,TypeError,ValueError): routed=None
-                    if routed is None: rejects["route unavailable"]+=1;continue
-                    candidate,reason=validate_plan(stops,routed,p,total_minutes)
-                    route_mode="Walking times are route estimates from Geoapify."
-                if not candidate: rejects[reason]+=1;continue
-                result=candidate;break
-            yield progress("estimate_route",("Checked walking time and included a five-minute allowance per transfer." if result and result["walk"] else "Checked whether the outing requires any transfers."))
-            if not result:
-                blockers=", ".join(rejects) or "required activities or walking limits"
-                yield progress("validate_plan","No candidate passed all checks.")
-                yield {"type":"empty","message":f"No outing fits these limits ({blockers}). Try changing your start time, budget, or duration, or choose another area.","preferences":p.model_dump()};return
-            for stop in result["stops"]: stop["why"]=explain(stop,p,tags,diet)
-            notes=[]
-            if result["walk"]: notes.append(route_mode)
-            if not p.starting_area: notes.append("The clock starts at the first stop. Travel from home and the return trip are extra.")
-            elif p.starting_area: notes.append("Travel from your starting point is included. The return trip is extra.")
-            notes.append("Spending is an estimate for the whole party. Optional purchases are extra.")
-            if "crowds" in flags: notes.append("Crowd levels are unverified. Saturday afternoons can vary.")
-            if any(not s["place"].get("hours") for s in result["stops"]): notes.append("Some Saturday hours are unconfirmed. Check the linked venue before leaving.")
-            covered=set().union(*(s["place"]["tags"] for s in result["stops"]))
-            missed=[t for t in tags if t not in covered]
-            if missed: notes.append("This route leaves out "+", ".join(missed)+" to fit the available places, time and budget.")
-            today=datetime.now(ZoneInfo("Asia/Kolkata")).date()
-            sat=today+timedelta(days=(5-today.weekday())%7)
-            yield progress("validate_plan",f"Verified {result['total']} minutes and an upper estimate of ₹{result['high']:,} against your limits.")
-            yield dict(type="plan",**result,preferences=p.model_dump(),date=sat.isoformat(),source=source,notes=notes)
-    except (ValidationError,ValueError,TypeError):
-        yield {"type":"clarify","message":"Please check the input. Use a city, non-negative budget, duration such as ‘90 minutes’, and a start time in HH:MM format.","preferences":{}}
+    async with httpx.AsyncClient(timeout=12, trust_env=False) as client:
+        try:
+            prefs, method = await parse_preferences(client, value)
+        except ValidationError as error:
+            detail = error.errors()[0]
+            field = ".".join(map(str, detail["loc"]))
+            yield {
+                "type": "clarify",
+                "message": f"Please check {field}: {detail['msg']}.",
+                "preferences": {},
+            }
+            return
+        except (ValueError, TypeError):
+            yield {
+                "type": "clarify",
+                "message": "Please use valid JSON or describe your Saturday in plain text.",
+                "preferences": {},
+            }
+            return
+        prefs.city = canonical_city(prefs.city)
+        yield event(
+            "parse_preferences",
+            {"format": method},
+            {"city": prefs.city, "budget": prefs.budget, "minutes": duration(prefs.available_time)},
+            method + " interpreted your request.",
+        )
+
+        def terminal(kind, message):
+            return {"type": kind, "message": message, "preferences": prefs.model_dump()}
+
+        missing = questions(prefs, value)
+        if missing:
+            yield terminal("clarify", " ".join(missing[:2]))
+            return
+        limits = interpret_constraints(prefs)
+        if limits.unsupported:
+            yield terminal(
+                "empty",
+                "The venue records cannot verify "
+                + ", ".join(limits.unsupported)
+                + ". Edit this requirement if it is flexible.",
+            )
+            return
+        tags = list(
+            dict.fromkeys(classify(tag) or tag.lower().strip() for tag in prefs.interests)
+        ) or ["walks", "food", "art"]
+        tags = [tag for tag in tags if tag not in limits.excluded]
+        places, origin, source, total_found = await find_places(client, prefs, tags, limits)
+        yield event(
+            "find_places",
+            {"city": prefs.city, "interests": tags, "constraints": prefs.constraints},
+            {"found": total_found, "eligible": len(places), "source": source},
+            f"{source}: {len(places)} of {total_found} places passed the filters.",
+        )
+        if prefs.starting_area and not origin:
+            yield terminal(
+                "clarify",
+                "I couldn’t locate that starting point. Enter a named venue or leave it blank to start at your first stop.",
+            )
+            return
+        if not places:
+            msg = (
+                "No eligible venue meets the specified constraints."
+                if total_found
+                else f"No place data available for {prefs.city}. The sourced guides cover "
+                + ", ".join(FALLBACK_CITIES)
+                + "."
+            )
+            yield terminal("empty", msg)
+            return
+        if limits.food_uncertain:
+            limits.required.discard("meal")
+        brief = Brief.create(prefs, limits, tags, origin)
+        if brief.tired:
+            places = [
+                {**place, "minutes": place.get("short_minutes", place["minutes"])}
+                for place in places
+            ]
+        candidates, cache, rejections, closest = build_candidates(places, brief)
+        yield event(
+            "build_candidates",
+            {"venues": len(places), "minutes": brief.minutes, "budget": prefs.budget},
+            {"feasible_previews": len(candidates), "rejected": dict(rejections)},
+            f"Ranked {len(candidates)} feasible provisional itineraries.",
+        )
+        lookups = {}
+        for _, stops in candidates:
+            legs = await estimate_route(client, stops, brief, cache, lookups)
+            names = [place["name"] for place in stops]
+            yield event(
+                "estimate_route",
+                {"stops": names},
+                {"legs": legs},
+                f"Estimated {sum(leg['minutes'] for leg in legs)} minutes of travel.",
+            )
+            plan, failure = validate_plan(stops, legs, brief)
+            if failure:
+                reason, gap = failure
+                yield event(
+                    "validate_plan",
+                    {"stops": names},
+                    {"passed": False, "reason": reason, "gap": gap},
+                    "Rechecked route failed on " + reason + ".",
+                )
+                if reason not in closest or gap < closest[reason][0]:
+                    closest[reason] = (gap, names[-1])
+                continue
+            yield event(
+                "validate_plan",
+                {"stops": names, "time_limit": brief.minutes, "budget_limit": prefs.budget},
+                {"passed": True, "minutes": plan["total"], "upper_inr": plan["high"]},
+                f"Verified {plan['total']} minutes and up to ₹{plan['high']:,}, including transfers.",
+            )
+            yield finish_plan(plan, brief, places, cache, source, candidates)
+            return
+        yield terminal("empty", explain_failure(closest))

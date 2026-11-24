@@ -24,7 +24,12 @@
       1080
     ],
     "price_basis": "Free public entry",
-    "price_source": "https://old.karnatakatourism.org/tour-item/cubbon-park/"
+    "price_source": "https://old.karnatakatourism.org/tour-item/cubbon-park/",
+    "primary_tags": [
+      "walks",
+      "nature"
+    ],
+    "crowd": "medium"
   },
   {
     "id": "blr-map",
@@ -52,7 +57,12 @@
       1170
     ],
     "price_basis": "Free-access galleries only",
-    "wheelchair": true
+    "wheelchair": true,
+    "primary_tags": [
+      "art",
+      "photography"
+    ],
+    "crowd": "low"
   },
   {
     "id": "blr-paa",
@@ -78,7 +88,12 @@
       390,
       1350
     ],
-    "price_basis": "Estimated meal per person"
+    "price_basis": "Estimated meal per person",
+    "primary_tags": [
+      "food"
+    ],
+    "crowd": "medium",
+    "food_role": "meal"
   },
   {
     "id": "blr-coffee",
@@ -104,7 +119,13 @@
       510,
       1140
     ],
-    "price_basis": "Estimated light meal per person"
+    "price_basis": "Estimated light meal per person",
+    "primary_tags": [
+      "food",
+      "coffee"
+    ],
+    "crowd": "high",
+    "food_role": "meal"
   },
   {
     "id": "blr-blossom",
@@ -127,7 +148,17 @@
     "source": "https://thevinylmap.com/record-stores/india/bengaluru/blossom-book-house/",
     "note": "Browse the books at the branch above Matteo Coffea and ask about the vinyl selection. Stock varies. Purchases are optional.",
     "checked_on": "2026-11-24",
-    "price_basis": "Browsing only; purchases are extra"
+    "price_basis": "Browsing only; purchases are extra",
+    "primary_tags": [
+      "books"
+    ],
+    "crowd": "high",
+    "hours": [
+      660,
+      1260
+    ],
+    "hours_source": "https://in.worldorgs.com/catalog/bengaluru/book-store/blossoms-book-house",
+    "hours_note": "Branch listings disagree. The planner uses the overlapping 11:00–21:00 window."
   },
   {
     "id": "blr-kcdas",
@@ -154,7 +185,13 @@
       1320
     ],
     "price_basis": "Estimated snacks per person",
-    "meal_type": "snack"
+    "meal_type": "snack",
+    "primary_tags": [
+      "food",
+      "desserts"
+    ],
+    "crowd": "medium",
+    "food_role": "snack"
   },
   {
     "id": "blr-ime",
@@ -181,7 +218,12 @@
       1140
     ],
     "price_basis": "Estimated weekend admission; verify before visiting",
-    "coordinate_source": "https://mapcarta.com/N10238264062"
+    "coordinate_source": "https://mapcarta.com/N10238264062",
+    "primary_tags": [
+      "music"
+    ],
+    "crowd": "medium",
+    "short_minutes": 65
   },
   {
     "id": "ggn-leisure",
@@ -204,7 +246,12 @@
     "note": "Walk through the lawns in Sector 29. General entry is listed as free. Weekend footfall can vary.",
     "checked_on": "2026-11-24",
     "price_basis": "Free public entry",
-    "coordinate_source": "https://www.tripandstays.com/stays/destinationideas/leisure-valley-park"
+    "coordinate_source": "https://www.tripandstays.com/stays/destinationideas/leisure-valley-park",
+    "primary_tags": [
+      "walks",
+      "nature"
+    ],
+    "crowd": "medium"
   },
   {
     "id": "ggn-bikaner",
@@ -231,7 +278,12 @@
       1350
     ],
     "hours_source": "https://order.bikanervala.com/store-locator/gurugram/bikanervala-sector-29-gurgaon",
-    "price_basis": "Estimated light meal per person"
+    "price_basis": "Estimated light meal per person",
+    "primary_tags": [
+      "food"
+    ],
+    "crowd": "high",
+    "food_role": "meal"
   },
   {
     "id": "ggn-museo",
@@ -258,7 +310,12 @@
       660,
       1140
     ],
-    "price_basis": "Published ordinary admission, by nationality"
+    "price_basis": "Published ordinary admission, by nationality",
+    "primary_tags": [
+      "art",
+      "photography"
+    ],
+    "crowd": "low"
   },
   {
     "id": "ggn-fig",
@@ -280,7 +337,13 @@
     "source": "https://www.tripadvisor.com/Restaurant_Review-g297615-d19860481-Reviews-Fig_at_Museo-Gurugram_Gurgaon_Gurgaon_District_Haryana.html",
     "note": "Settle into the café at Museo Camera. Vegetarian dishes are available alongside other dishes. The range is a per-person estimate.",
     "checked_on": "2026-11-24",
-    "price_basis": "Estimated café meal per person"
+    "price_basis": "Estimated café meal per person",
+    "primary_tags": [
+      "food",
+      "coffee"
+    ],
+    "crowd": "medium",
+    "food_role": "meal"
   },
   {
     "id": "ggn-burma",
@@ -303,7 +366,12 @@
     "note": "Choose a Burmese noodle bowl or tea at the vegetarian Cyber Hub branch. The amount is an estimate for one diner.",
     "checked_on": "2026-11-24",
     "price_basis": "Estimated restaurant spend per person",
-    "diet_source": "https://www.zomato.com/ncr/burma-burma-cyber-hub-dlf-cyber-city-gurgaon"
+    "diet_source": "https://www.zomato.com/ncr/burma-burma-cyber-hub-dlf-cyber-city-gurgaon",
+    "primary_tags": [
+      "food"
+    ],
+    "crowd": "high",
+    "food_role": "meal"
   },
   {
     "id": "del-baoli",
@@ -332,7 +400,12 @@
       1050
     ],
     "price_basis": "Free public entry",
-    "price_source": "https://delhiatlas.in/places/agrasen-ki-baoli/"
+    "price_source": "https://delhiatlas.in/places/agrasen-ki-baoli/",
+    "primary_tags": [
+      "history",
+      "walks"
+    ],
+    "crowd": "high"
   },
   {
     "id": "del-oxford",
@@ -358,7 +431,11 @@
       600,
       1320
     ],
-    "price_basis": "Browsing only; purchases are extra"
+    "price_basis": "Browsing only; purchases are extra",
+    "primary_tags": [
+      "books"
+    ],
+    "crowd": "medium"
   },
   {
     "id": "del-saravanaa",
@@ -381,7 +458,12 @@
     "note": "Stop for a South Indian vegetarian meal on Janpath. The range is a per-person estimate and queues may affect timing.",
     "checked_on": "2026-11-24",
     "price_basis": "Estimated meal per person",
-    "diet_source": "https://v1.saravanabhavan.com/find-us"
+    "diet_source": "https://v1.saravanabhavan.com/find-us",
+    "primary_tags": [
+      "food"
+    ],
+    "crowd": "high",
+    "food_role": "meal"
   },
   {
     "id": "del-charkha",
@@ -407,6 +489,41 @@
       600,
       1260
     ],
-    "price_basis": "Estimated admission allowance; exact fee unverified"
+    "price_basis": "Estimated admission allowance; exact fee unverified",
+    "primary_tags": [
+      "history"
+    ],
+    "crowd": "low"
+  },
+  {
+    "id": "blr-paa-jp",
+    "name": "Paakashala, JP Nagar",
+    "city": "Bengaluru",
+    "area": "JP Nagar",
+    "lat": 12.91075,
+    "lon": 77.5846,
+    "tags": [
+      "food",
+      "indoors"
+    ],
+    "primary_tags": [
+      "food"
+    ],
+    "kind": "restaurant",
+    "food_role": "meal",
+    "minutes": 40,
+    "low": 160,
+    "high": 400,
+    "veg": "only",
+    "crowd": "medium",
+    "hours": [
+      390,
+      1350
+    ],
+    "note": "The JP Nagar branch serves South Indian thalis and dosas. Allow a sit-down meal near the south Bengaluru music museum.",
+    "source": "https://paakashala.com/bangalore/veg-restaurant-in-jp-nagar/",
+    "coordinate_source": "https://aroundus.com/p/172135837-paakashala-at-j-p-nagar-veg-restaurants-in-jp-nagar",
+    "price_basis": "Estimated per-person meal allowance",
+    "checked_on": "2026-11-24"
   }
 ]
